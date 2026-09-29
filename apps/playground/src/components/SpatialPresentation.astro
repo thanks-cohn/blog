@@ -97,6 +97,22 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       </span>
     </label>
 
+    <div class="sphere-debug-controls">
+      <label class="sphere-asset-add">
+        <span>Debug globe</span>
+        <select id="glb-debug-enabled-select">
+          <option value="off">Off</option>
+          <option value="on">On</option>
+        </select>
+      </label>
+      <label class="sphere-asset-add">
+        <span>GLB object</span>
+        <select id="glb-debug-object-select">
+          <option value="">Choose GLB…</option>
+        </select>
+      </label>
+    </div>
+
     <label class="sphere-asset-add">
       <span>Add / restore asset</span>
       <select id="sphere-asset-picker">
@@ -182,7 +198,9 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     | "sphere.circumference"
     | "sphere.restitution"
     | "viewport.enabled"
-    | "viewport.paddingPx";
+    | "viewport.paddingPx"
+    | "debug.glbGlobe.enabled"
+    | "debug.glbGlobe.objectName";
   type PresentationSettingValue = boolean | number | string;
   type AssetHemisphere = "front" | "back";
   type AssetPlacementState = Record<string, { hemisphere: AssetHemisphere; visible: boolean }>;
@@ -202,6 +220,12 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       enabled: boolean;
       paddingPx: number;
     };
+    debug: {
+      glbGlobe: {
+        enabled: boolean;
+        objectName: string;
+      };
+    };
   };
   type SettingsListener = (settings: PresentationSettingsSnapshot) => void;
 
@@ -217,6 +241,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         setAssetVisible(name: string, visible: boolean): void;
         getAssetMotion(name: string): ObjectMotion | null;
         setAssetMotion(name: string, motion: ObjectMotion): void;
+        setGlbDebugGlobe(enabled: boolean, objectName?: string): void;
       };
     }
   }
@@ -233,6 +258,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   const sphereCircumferenceInput = document.getElementById("sphere-circumference-input") as HTMLInputElement | null;
   const cameraPlacementSelect = document.getElementById("camera-placement-select") as HTMLSelectElement | null;
   const viewportContainmentToggle = document.getElementById("viewport-containment-toggle") as HTMLInputElement | null;
+  const glbDebugEnabledSelect = document.getElementById("glb-debug-enabled-select") as HTMLSelectElement | null;
+  const glbDebugObjectSelect = document.getElementById("glb-debug-object-select") as HTMLSelectElement | null;
   const assetPicker = document.getElementById("sphere-asset-picker") as HTMLSelectElement | null;
   const frontAssetsList = document.getElementById("front-assets-list");
   const backAssetsList = document.getElementById("back-assets-list");
@@ -246,6 +273,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   const threeLoadAttempts = new Map<string, number>();
   const threeRetryAt = new Map<string, number>();
   const occluders = new Map<number, any>();
+  const debugGlobes = new Map<string, any>();
 
   function ensureThree() {
     if (threeRenderer || !(glbCanvas instanceof HTMLCanvasElement)) return;
@@ -349,6 +377,28 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     return mesh;
   }
 
+
+  function ensureDebugGlobe(obj: SceneObject) {
+    if (!threeScene) return null;
+    const T3: any = THREE;
+    let globe: any = debugGlobes.get(obj.id);
+    if (!globe) {
+      const geometry: any = new T3.SphereGeometry(1, 24, 16);
+      const material: any = new T3.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.16,
+        wireframe: true,
+        depthTest: false
+      });
+      globe = new T3.Mesh(geometry, material);
+      globe.renderOrder = 10000;
+      globe.visible = false;
+      threeScene.add(globe);
+      debugGlobes.set(obj.id, globe);
+    }
+    return globe;
+  }
 
   if (root && canvas instanceof HTMLCanvasElement) {
     const gameCanvas: HTMLCanvasElement = canvas;
@@ -495,6 +545,12 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             0,
             Number(station?.viewport?.paddingPx ?? config.arrangement?.viewport?.paddingPx ?? 18)
           )
+        },
+        debug: {
+          glbGlobe: {
+            enabled: Boolean(station?.debug?.glbGlobe?.enabled ?? config.arrangement?.debug?.glbGlobe?.enabled ?? false),
+            objectName: String(station?.debug?.glbGlobe?.objectName ?? config.arrangement?.debug?.glbGlobe?.objectName ?? "")
+          }
         }
       };
     }
@@ -517,6 +573,12 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         viewport: {
           enabled: Boolean(source.viewport.enabled),
           paddingPx: Number(source.viewport.paddingPx)
+        },
+        debug: {
+          glbGlobe: {
+            enabled: Boolean(source.debug.glbGlobe.enabled),
+            objectName: String(source.debug.glbGlobe.objectName ?? "")
+          }
         }
       };
     }
@@ -566,6 +628,18 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           paddingPx: Number.isFinite(Number(raw?.viewport?.paddingPx))
             ? Math.max(0, Number(raw.viewport.paddingPx))
             : defaults.viewport.paddingPx
+        },
+        debug: {
+          glbGlobe: {
+            enabled:
+              typeof raw?.debug?.glbGlobe?.enabled === "boolean"
+                ? raw.debug.glbGlobe.enabled
+                : defaults.debug.glbGlobe.enabled,
+            objectName:
+              typeof raw?.debug?.glbGlobe?.objectName === "string"
+                ? raw.debug.glbGlobe.objectName
+                : defaults.debug.glbGlobe.objectName
+          }
         }
       };
       normalizeCameraForSphere(loaded);
@@ -636,6 +710,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (key === "sphere.restitution") return presentationSettings.sphere.restitution;
         if (key === "viewport.enabled") return presentationSettings.viewport.enabled;
         if (key === "viewport.paddingPx") return presentationSettings.viewport.paddingPx;
+        if (key === "debug.glbGlobe.enabled") return presentationSettings.debug.glbGlobe.enabled;
+        if (key === "debug.glbGlobe.objectName") return presentationSettings.debug.glbGlobe.objectName;
         return cloneSettings(presentationSettings);
       },
       set(key: PresentationSettingKey, value: PresentationSettingValue) {
@@ -666,6 +742,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           presentationSettings.viewport.enabled = Boolean(value);
         } else if (key === "viewport.paddingPx") {
           presentationSettings.viewport.paddingPx = Math.max(0, Number(value) || 0);
+        } else if (key === "debug.glbGlobe.enabled") {
+          presentationSettings.debug.glbGlobe.enabled = Boolean(value);
+        } else if (key === "debug.glbGlobe.objectName") {
+          presentationSettings.debug.glbGlobe.objectName = String(value ?? "");
         }
         return publishSettings();
       },
@@ -692,6 +772,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (key === "sphere.restitution") presentationSettings.sphere.restitution = defaults.sphere.restitution;
         if (key === "viewport.enabled") presentationSettings.viewport.enabled = defaults.viewport.enabled;
         if (key === "viewport.paddingPx") presentationSettings.viewport.paddingPx = defaults.viewport.paddingPx;
+        if (key === "debug.glbGlobe.enabled") presentationSettings.debug.glbGlobe.enabled = defaults.debug.glbGlobe.enabled;
+        if (key === "debug.glbGlobe.objectName") presentationSettings.debug.glbGlobe.objectName = defaults.debug.glbGlobe.objectName;
         normalizeCameraForSphere(presentationSettings);
         return publishSettings();
       },
@@ -734,6 +816,13 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (!allSceneAssetNames().some((asset) => asset.name === name)) return;
         assetMotionState[name] = normalizeObjectMotion(motion);
         saveAssetMotionState();
+      },
+      setGlbDebugGlobe(enabled: boolean, objectName?: string) {
+        presentationSettings.debug.glbGlobe.enabled = Boolean(enabled);
+        if (typeof objectName === "string") {
+          presentationSettings.debug.glbGlobe.objectName = objectName;
+        }
+        publishSettings();
       }
     };
 
@@ -895,6 +984,23 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (viewportContainmentToggle) {
           viewportContainmentToggle.checked = presentationSettings.viewport.enabled;
         }
+        if (glbDebugEnabledSelect) {
+          glbDebugEnabledSelect.value = presentationSettings.debug.glbGlobe.enabled ? "on" : "off";
+        }
+        if (glbDebugObjectSelect) {
+          glbDebugObjectSelect.replaceChildren();
+          const prompt = document.createElement("option");
+          prompt.value = "";
+          prompt.textContent = "Choose GLB…";
+          glbDebugObjectSelect.appendChild(prompt);
+          for (const obj of (layouts[arrivingAt] ?? []).filter((item: SceneObject) => item.kind === "3d" && Boolean(item.url))) {
+            const option = document.createElement("option");
+            option.value = obj.name;
+            option.textContent = obj.name;
+            option.selected = obj.name === presentationSettings.debug.glbGlobe.objectName;
+            glbDebugObjectSelect.appendChild(option);
+          }
+        }
 
         frontAssetsList.replaceChildren();
         backAssetsList.replaceChildren();
@@ -999,6 +1105,18 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         window.webrevPresentationSettings?.set(
           "viewport.enabled",
           viewportContainmentToggle.checked
+        );
+      });
+      glbDebugEnabledSelect?.addEventListener("change", () => {
+        window.webrevPresentationSettings?.set(
+          "debug.glbGlobe.enabled",
+          glbDebugEnabledSelect.value === "on"
+        );
+      });
+      glbDebugObjectSelect?.addEventListener("change", () => {
+        window.webrevPresentationSettings?.set(
+          "debug.glbGlobe.objectName",
+          glbDebugObjectSelect.value
         );
       });
       window.addEventListener("webrev:presentation-settings", () => {
@@ -1688,6 +1806,22 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             model.rotation.set(0, obj.spin, 0);
             model.scale.setScalar(obj.size);
           }
+
+          if (
+            presentationSettings.debug.glbGlobe.enabled &&
+            presentationSettings.debug.glbGlobe.objectName === obj.name
+          ) {
+            const globe = ensureDebugGlobe(obj);
+            if (globe) {
+              const debugRadius = Math.max(
+                0.18,
+                (Number.isFinite(obj.modelRadius) ? Number(obj.modelRadius) : 1) * obj.size
+              );
+              globe.visible = true;
+              globe.position.set(world.x, world.y, world.z);
+              globe.scale.setScalar(debugRadius);
+            }
+          }
         } else {
           // No uploaded 3D asset exists for this slot, so render a mathematical
           // proxy placeholder. Uploaded GLB/GLTF assets are rendered by Three.js.
@@ -1934,6 +2068,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
         lastPaperRect = null;
         for (const model of threeObjects.values()) model.visible = false;
+        for (const globe of debugGlobes.values()) globe.visible = false;
         for (const occluder of occluders.values()) occluder.visible = false;
         for (const layout of layouts) {
           for (const obj of layout) obj.lastScreen = undefined;
@@ -2230,6 +2365,13 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   .sphere-diameter-note {
     color:rgba(255,255,255,.48);
     font-size:11px;
+  }
+
+  .sphere-debug-controls {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:10px;
+    margin-bottom:4px;
   }
 
   .sphere-viewport-toggle {
