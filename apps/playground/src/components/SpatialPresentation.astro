@@ -798,21 +798,54 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         window.webrevPresentationSettings?.setAssetVisible(name, true);
         assetPicker.value = "";
       });
+      function commitHemisphereDiameter(
+        input: HTMLInputElement,
+        key: "assets.frontDiameter" | "assets.backDiameter",
+        fallback: () => number
+      ) {
+        const value = Number(input.value);
+        if (!Number.isFinite(value)) {
+          input.value = fallback().toFixed(1);
+          return;
+        }
+        window.webrevPresentationSettings?.set(key, value);
+        input.value = Number(
+          window.webrevPresentationSettings?.get(key) ?? fallback()
+        ).toFixed(1);
+      }
+
       frontDiameterInput?.addEventListener("change", () => {
-        const value = Number(frontDiameterInput.value);
-        if (!Number.isFinite(value)) {
-          frontDiameterInput.value = presentationSettings.assets.frontDiameter.toFixed(1);
-          return;
-        }
-        window.webrevPresentationSettings?.set("assets.frontDiameter", value);
+        commitHemisphereDiameter(
+          frontDiameterInput,
+          "assets.frontDiameter",
+          () => presentationSettings.assets.frontDiameter
+        );
       });
+      frontDiameterInput?.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        commitHemisphereDiameter(
+          frontDiameterInput,
+          "assets.frontDiameter",
+          () => presentationSettings.assets.frontDiameter
+        );
+      });
+
       backDiameterInput?.addEventListener("change", () => {
-        const value = Number(backDiameterInput.value);
-        if (!Number.isFinite(value)) {
-          backDiameterInput.value = presentationSettings.assets.backDiameter.toFixed(1);
-          return;
-        }
-        window.webrevPresentationSettings?.set("assets.backDiameter", value);
+        commitHemisphereDiameter(
+          backDiameterInput,
+          "assets.backDiameter",
+          () => presentationSettings.assets.backDiameter
+        );
+      });
+      backDiameterInput?.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        commitHemisphereDiameter(
+          backDiameterInput,
+          "assets.backDiameter",
+          () => presentationSettings.assets.backDiameter
+        );
       });
       window.addEventListener("webrev:presentation-settings", renderSphereSettings);
       window.addEventListener("webrev:asset-placement", () => {
