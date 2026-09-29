@@ -2238,6 +2238,84 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (line) ctx.fillText(line, x, yy);
       }
 
+      function projectedImagePlane(center: Vec3, widthWorld = 5.4, heightWorld = 5.9) {
+        const hw = widthWorld * 0.5;
+        const hh = heightWorld * 0.5;
+        const corners = [
+          project({ x: center.x - hw, y: center.y - hh, z: center.z }),
+          project({ x: center.x + hw, y: center.y - hh, z: center.z }),
+          project({ x: center.x + hw, y: center.y + hh, z: center.z }),
+          project({ x: center.x - hw, y: center.y + hh, z: center.z })
+        ];
+        if (corners.some((corner) => !corner)) return null;
+        return corners as [Projected, Projected, Projected, Projected];
+      }
+
+      function drawFixedImagePlane(
+        station: any,
+        center: Vec3,
+        alpha: number,
+        current: boolean
+      ) {
+        const corners = projectedImagePlane(center);
+        if (!corners) return false;
+        const [bottomLeft, bottomRight, topRight, topLeft] = corners;
+        const colors = themeColors(station.theme);
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+
+        // World-fixed frame. The projected quad naturally foreshortens as the
+        // Hemisphere Editor camera moves around the image plane.
+        ctx.beginPath();
+        ctx.moveTo(bottomLeft.x, bottomLeft.y);
+        ctx.lineTo(bottomRight.x, bottomRight.y);
+        ctx.lineTo(topRight.x, topRight.y);
+        ctx.lineTo(topLeft.x, topLeft.y);
+        ctx.closePath();
+        ctx.lineWidth = Math.max(2, Math.min(12, Math.min(width, height) * 0.012));
+        ctx.strokeStyle = "#141414";
+        ctx.stroke();
+
+        const art = ctx.createLinearGradient(
+          topLeft.x,
+          topLeft.y,
+          bottomRight.x,
+          bottomRight.y
+        );
+        art.addColorStop(0, colors[0]);
+        art.addColorStop(.52, colors[1]);
+        art.addColorStop(1, colors[2]);
+        ctx.fillStyle = art;
+        ctx.fill();
+
+        // Give the fixed plane a light edge so its angle is readable even when
+        // viewed nearly side-on.
+        ctx.lineWidth = 1.25;
+        ctx.strokeStyle = "rgba(255,255,255,.28)";
+        ctx.stroke();
+
+        // Label follows the plane's lower edge rather than billboarding.
+        const edgeDx = bottomRight.x - bottomLeft.x;
+        const edgeDy = bottomRight.y - bottomLeft.y;
+        const edgeLength = Math.hypot(edgeDx, edgeDy);
+        if (edgeLength > 42) {
+          const angle = Math.atan2(edgeDy, edgeDx);
+          ctx.translate(
+            bottomLeft.x + edgeDx * 0.08,
+            bottomLeft.y + edgeDy * 0.08
+          );
+          ctx.rotate(angle);
+          ctx.fillStyle = "rgba(255,255,255,.86)";
+          ctx.font = `${Math.max(10, Math.min(18, edgeLength * 0.045))}px ui-sans-serif, system-ui`;
+          ctx.textAlign = "left";
+          ctx.fillText(station.label, 0, -8);
+        }
+
+        ctx.restore();
+        return true;
+      }
+
       function drawStation(index: number, now: number) {
         const station = stations[index];
         const center = stationCenter(index);
@@ -2262,24 +2340,33 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const imageX = cp.x - imageW * .5;
         const imageY = cp.y - imageH * .5 - lift;
 
+        const fixedEditorPlane =
+          current &&
+          presentationSettings.editor.mode === "hemisphere" &&
+          drawFixedImagePlane(station, center, alpha, current);
+
         ctx.save();
         ctx.globalAlpha = alpha;
-        ctx.fillStyle = "#141414";
-        ctx.fillRect(imageX - 10, imageY - 10, imageW + 20, imageH + 20);
 
-        const art = ctx.createLinearGradient(imageX, imageY, imageX + imageW, imageY + imageH);
-        art.addColorStop(0, colors[0]);
-        art.addColorStop(.52, colors[1]);
-        art.addColorStop(1, colors[2]);
-        ctx.fillStyle = art;
-        ctx.fillRect(imageX, imageY, imageW, imageH);
+        if (!fixedEditorPlane) {
+          ctx.fillStyle = "#141414";
+          ctx.fillRect(imageX - 10, imageY - 10, imageW + 20, imageH + 20);
 
-        ctx.fillStyle = "rgba(255,255,255,.86)";
-        ctx.font = `${Math.max(11, Math.min(22, scale * .24))}px ui-sans-serif, system-ui`;
-        ctx.textAlign = "left";
-        ctx.fillText(station.label, imageX + 16, imageY + imageH - 18);
+          const art = ctx.createLinearGradient(imageX, imageY, imageX + imageW, imageY + imageH);
+          art.addColorStop(0, colors[0]);
+          art.addColorStop(.52, colors[1]);
+          art.addColorStop(1, colors[2]);
+          ctx.fillStyle = art;
+          ctx.fillRect(imageX, imageY, imageW, imageH);
 
-        // The paper is always present. Closed = perpendicular/edge-on to the image.
+          ctx.fillStyle = "rgba(255,255,255,.86)";
+          ctx.font = `${Math.max(11, Math.min(22, scale * .24))}px ui-sans-serif, system-ui`;
+          ctx.textAlign = "left";
+          ctx.fillText(station.label, imageX + 16, imageY + imageH - 18);
+        }
+
+        // The paper remains an editor overlay for now. The center image plane
+        // itself is fixed in world space while Hemisphere Editor cameras orbit it.
         const open = current ? paperOpen : 0;
         const paperW = 5.0 * scale;
         const paperFullH = 3.15 * scale;
