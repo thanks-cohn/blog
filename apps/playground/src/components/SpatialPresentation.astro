@@ -182,6 +182,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       };
     };
   };
+  type GlbRuntimeStatus = "acknowledged" | "loading" | "loaded" | "retrying" | "failed";
   type SettingsListener = (settings: PresentationSettingsSnapshot) => void;
   type SettingOption = { value: string; label: string };
   type SettingDescriptor = {
@@ -205,12 +206,13 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         reset(key?: PresentationSettingKey): PresentationSettingsSnapshot;
         subscribe(listener: SettingsListener): () => void;
         describeSettings(stationId?: string): SettingDescriptor[];
-        listAssets(stationId?: string): Array<{ name: string; hemisphere: AssetHemisphere; visible: boolean; motion: ObjectMotion; kind: "2d" | "3d"; uploaded: boolean }>;
+        listAssets(stationId?: string): Array<{ name: string; hemisphere: AssetHemisphere; visible: boolean; motion: ObjectMotion; kind: "2d" | "3d"; uploaded: boolean; runtimeStatus?: GlbRuntimeStatus; loadAttempts?: number }>;
         setAssetHemisphere(name: string, hemisphere: AssetHemisphere): void;
         setAssetVisible(name: string, visible: boolean): void;
         getAssetMotion(name: string): ObjectMotion | null;
         setAssetMotion(name: string, motion: ObjectMotion): void;
         setGlbDebugGlobe(enabled: boolean, objectName?: string): void;
+        getAssetRuntimeStatus(name: string): { status: GlbRuntimeStatus; attempts: number; lastError?: string } | null;
       };
     }
   }
@@ -236,6 +238,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   const threeLoading = new Set<string>();
   const threeLoadAttempts = new Map<string, number>();
   const threeRetryAt = new Map<string, number>();
+  const glbRuntimeStatus = new Map<string, GlbRuntimeStatus>();
+  const glbRuntimeError = new Map<string, string>();
   const occluders = new Map<number, any>();
   const debugGlobes = new Map<string, any>();
 
@@ -258,6 +262,24 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     gltfLoader = new (GLTFLoader as any)();
   }
 
+  function publishGlbRuntimeStatus(obj: SceneObject, status: GlbRuntimeStatus, error?: unknown) {
+    glbRuntimeStatus.set(obj.name, status);
+    if (error != null) {
+      const message = error instanceof Error ? error.message : String(error);
+      glbRuntimeError.set(obj.name, message);
+    } else if (status === "loaded" || status === "loading") {
+      glbRuntimeError.delete(obj.name);
+    }
+    window.dispatchEvent(new CustomEvent("webrev:asset-runtime-status", {
+      detail: {
+        name: obj.name,
+        status,
+        attempts: threeLoadAttempts.get(obj.id) ?? 0,
+        lastError: glbRuntimeError.get(obj.name)
+      }
+    }));
+  }
+
   function ensureThreeObject(obj: SceneObject) {
     if (!obj.url || obj.kind !== "3d" || !gltfLoader || !threeScene || threeObjects.has(obj.id) || threeLoading.has(obj.id)) return;
 
@@ -266,6 +288,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     if (now < retryAt) return;
 
     threeLoading.add(obj.id);
+    publishGlbRuntimeStatus(obj, "loading");
     gltfLoader.load(
       obj.url,
       (gltf: any) => {
@@ -305,6 +328,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         threeLoading.delete(obj.id);
         threeLoadAttempts.delete(obj.id);
         threeRetryAt.delete(obj.id);
+        publishGlbRuntimeStatus(obj, "loaded");
       },
       undefined,
       (error: any) => {
@@ -313,6 +337,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         threeLoadAttempts.set(obj.id, attempt);
         const retryDelay = Math.min(8000, 400 * Math.pow(2, Math.min(attempt - 1, 4)));
         threeRetryAt.set(obj.id, performance.now() + retryDelay);
+        publishGlbRuntimeStatus(obj, attempt >= 5 ? "failed" : "retrying", error);
         console.warn(`GLB load attempt ${attempt} failed for ${obj.name}; retrying in ${retryDelay}ms`, error);
       }
     );
@@ -372,6 +397,16 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     const assetPlacementStorageKey = "webrev:asset-placement:v2";
     const assetMotionStorageKey = "webrev:asset-motion:v1";
     const stationDefinitions = Array.isArray(config.stations) ? config.stations : [];
+    for (const station of stationDefinitions) {
+      const assets = Array.isArray(config.assetsByArtwork?.[station.artworkName])
+        ? config.assetsByArtwork[station.artworkName]
+        : [];
+      for (const asset of assets) {
+        if (asset.kind === "3d" && !glbRuntimeStatus.has(asset.name)) {
+          glbRuntimeStatus.set(asset.name, "acknowledged");
+        }
+      }
+    }
 
     function allSceneAssetNames() {
       const result: Array<{ name: string; stationId: string; kind: "2d" | "3d"; uploaded: boolean }> = [];
@@ -678,8 +713,20 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         { value: "", label: "Choose GLB…" },
         ...allSceneAssetNames()
           .filter((asset) => asset.stationId === stationId && asset.kind === "3d" && asset.uploaded)
-          .map((asset) => ({ value: asset.name, label: asset.name }))
+          .map((asset) => ({
+            value: asset.name,
+            label: `${asset.name} — ${glbRuntimeStatus.get(asset.name) ?? "acknowledged"}`
+          }))
       ];
+      const selectedDebugName = presentationSettings.debug.glbGlobe.objectName;
+      const selectedStatus = selectedDebugName
+        ? (glbRuntimeStatus.get(selectedDebugName) ?? "acknowledged")
+        : null;
+      const selectedAttempts = selectedDebugName
+        ? (threeLoadAttempts.get(
+            Array.from(threeObjects.keys()).find((id) => id.includes(selectedDebugName)) ?? ""
+          ) ?? 0)
+        : 0;
 
       return [
         {
@@ -729,13 +776,18 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           label: "Debug globe",
           group: "debug",
           control: "toggle",
-          description: "Draw a transparent sphere where the engine believes the selected GLB exists."
+          description: selectedStatus
+            ? `Selected GLB status: ${selectedStatus}`
+            : "Draw a transparent sphere where the engine believes the selected GLB exists."
         },
         {
           key: "debug.glbGlobe.objectName",
           label: "Debug GLB object",
           group: "debug",
           control: "select",
+          description: selectedStatus
+            ? `Runtime: ${selectedStatus}${selectedAttempts ? ` · attempts ${selectedAttempts}` : ""}`
+            : "Pick a GLB to inspect.",
           options: glbOptions
         }
       ];
@@ -841,7 +893,15 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             ...state,
             motion: assetMotionState[asset.name] ?? configuredMotionFor(asset.name),
             kind: asset.kind,
-            uploaded: asset.uploaded
+            uploaded: asset.uploaded,
+            runtimeStatus: asset.kind === "3d" && asset.uploaded
+              ? (glbRuntimeStatus.get(asset.name) ?? "acknowledged")
+              : undefined,
+            loadAttempts: asset.kind === "3d" && asset.uploaded
+              ? Array.from(threeLoadAttempts.entries())
+                  .filter(([id]) => id.includes(asset.name))
+                  .reduce((max, [, attempts]) => Math.max(max, attempts), 0)
+              : undefined
           };
         });
       },
@@ -871,6 +931,19 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           presentationSettings.debug.glbGlobe.objectName = objectName;
         }
         publishSettings();
+      },
+      getAssetRuntimeStatus(name: string) {
+        const known = allSceneAssetNames().some(
+          (asset) => asset.name === name && asset.kind === "3d" && asset.uploaded
+        );
+        if (!known) return null;
+        return {
+          status: glbRuntimeStatus.get(name) ?? "acknowledged",
+          attempts: Array.from(threeLoadAttempts.entries())
+            .filter(([id]) => id.includes(name))
+            .reduce((max, [, attempts]) => Math.max(max, attempts), 0),
+          lastError: glbRuntimeError.get(name)
+        };
       }
     };
 
@@ -1252,6 +1325,9 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       window.addEventListener("webrev:asset-placement", () => {
         syncAssetPlacementToLayouts();
         renderSphereSettings();
+      });
+      window.addEventListener("webrev:asset-runtime-status", () => {
+        if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
       });
       window.addEventListener("webrev:asset-motion", () => {
         for (const layout of layouts) {
