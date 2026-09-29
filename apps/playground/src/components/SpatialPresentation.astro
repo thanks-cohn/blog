@@ -128,6 +128,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     sphereFromRadius,
     type CameraPlacement
   } from "../lib/spatialSphere";
+  import {
+    fixedPositionAtTime,
+    normalizeObjectMotion,
+    type ObjectMotion
+  } from "../lib/objectMotion";
 
   type Vec3 = { x: number; y: number; z: number };
   type Projected = { x: number; y: number; depth: number; scale: number };
@@ -160,6 +165,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       max: Vec3;
     };
     modelRadius?: number;
+    motion: ObjectMotion;
+    anchor: Vec3;
+    anchorMode?: "absolute" | "camera-midpoint";
+    anchorOffset?: Vec3;
     lastScreen?: { x: number; y: number; radius: number; depth: number };
   };
 
@@ -203,9 +212,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         set(key: PresentationSettingKey, value: PresentationSettingValue): PresentationSettingsSnapshot;
         reset(key?: PresentationSettingKey): PresentationSettingsSnapshot;
         subscribe(listener: SettingsListener): () => void;
-        listAssets(stationId?: string): Array<{ name: string; hemisphere: AssetHemisphere; visible: boolean }>;
+        listAssets(stationId?: string): Array<{ name: string; hemisphere: AssetHemisphere; visible: boolean; motion: ObjectMotion }>;
         setAssetHemisphere(name: string, hemisphere: AssetHemisphere): void;
         setAssetVisible(name: string, visible: boolean): void;
+        getAssetMotion(name: string): ObjectMotion | null;
+        setAssetMotion(name: string, motion: ObjectMotion): void;
       };
     }
   }
@@ -345,6 +356,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     const settingsStorageKey = "webrev:spatial-settings:v3";
     const legacySettingsStorageKey = "webrev:spatial-settings:v2";
     const assetPlacementStorageKey = "webrev:asset-placement:v2";
+    const assetMotionStorageKey = "webrev:asset-motion:v1";
     const stationDefinitions = Array.isArray(config.stations) ? config.stations : [];
 
     function allSceneAssetNames() {
@@ -372,6 +384,34 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         }
       }
       return result;
+    }
+
+    function configuredMotionFor(name: string) {
+      return normalizeObjectMotion(config.assetMotion?.[name]);
+    }
+
+    function loadAssetMotionState() {
+      let stored: Record<string, unknown> = {};
+      try {
+        stored = JSON.parse(window.localStorage.getItem(assetMotionStorageKey) ?? "{}");
+      } catch {}
+
+      const state: Record<string, ObjectMotion> = {};
+      for (const asset of allSceneAssetNames()) {
+        state[asset.name] = normalizeObjectMotion(
+          stored?.[asset.name] ?? config.assetMotion?.[asset.name]
+        );
+      }
+      return state;
+    }
+
+    let assetMotionState = loadAssetMotionState();
+
+    function saveAssetMotionState() {
+      try {
+        window.localStorage.setItem(assetMotionStorageKey, JSON.stringify(assetMotionState));
+      } catch {}
+      window.dispatchEvent(new CustomEvent("webrev:asset-motion", { detail: assetMotionState }));
     }
 
     function loadAssetPlacement(): AssetPlacementState {
@@ -669,7 +709,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         );
         return Object.entries(assetPlacement)
           .filter(([name]) => names.has(name))
-          .map(([name, state]) => ({ name, ...state }));
+          .map(([name, state]) => ({
+            name,
+            ...state,
+            motion: assetMotionState[name] ?? configuredMotionFor(name)
+          }));
       },
       setAssetHemisphere(name: string, hemisphere: AssetHemisphere) {
         assetPlacement[name] ??= { hemisphere: "front", visible: true };
@@ -681,6 +725,15 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         assetPlacement[name] ??= { hemisphere: "front", visible: true };
         assetPlacement[name].visible = Boolean(visible);
         saveAssetPlacement();
+      },
+      getAssetMotion(name: string) {
+        if (!allSceneAssetNames().some((asset) => asset.name === name)) return null;
+        return normalizeObjectMotion(assetMotionState[name] ?? configuredMotionFor(name));
+      },
+      setAssetMotion(name: string, motion: ObjectMotion) {
+        if (!allSceneAssetNames().some((asset) => asset.name === name)) return;
+        assetMotionState[name] = normalizeObjectMotion(motion);
+        saveAssetMotionState();
       }
     };
 
@@ -769,6 +822,46 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           );
         });
 
+        const motionSelect = document.createElement("select");
+        motionSelect.className = "sphere-motion-select";
+        motionSelect.setAttribute("aria-label", `Motion for ${obj.name}`);
+        const motionOptions = [
+          ["free", "Free"],
+          ["fixed-anchored", "Fixed"],
+          ["fixed-range", "Fixed range"]
+        ] as const;
+        const currentMotionValue =
+          obj.motion.type === "free"
+            ? "free"
+            : obj.motion.fixedMode === "range"
+              ? "fixed-range"
+              : "fixed-anchored";
+        for (const [value, label] of motionOptions) {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = label;
+          option.selected = value === currentMotionValue;
+          motionSelect.appendChild(option);
+        }
+        motionSelect.addEventListener("change", () => {
+          if (motionSelect.value === "free") {
+            window.webrevPresentationSettings?.setAssetMotion(obj.name, { type: "free" });
+          } else if (motionSelect.value === "fixed-range") {
+            window.webrevPresentationSettings?.setAssetMotion(obj.name, {
+              type: "fixed",
+              fixedMode: "range",
+              range: 0.8,
+              behavior: { type: "bob", amplitude: 0.35, speed: 0.7 }
+            });
+          } else {
+            window.webrevPresentationSettings?.setAssetMotion(obj.name, {
+              type: "fixed",
+              fixedMode: "anchored",
+              behavior: { type: "none" }
+            });
+          }
+        });
+
         const remove = document.createElement("button");
         remove.type = "button";
         remove.className = "sphere-asset-remove";
@@ -778,7 +871,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           window.webrevPresentationSettings?.setAssetVisible(obj.name, false);
         });
 
-        row.append(name, side, remove);
+        row.append(name, side, motionSelect, remove);
         return row;
       }
 
@@ -917,6 +1010,23 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         syncAssetPlacementToLayouts();
         renderSphereSettings();
       });
+      window.addEventListener("webrev:asset-motion", () => {
+        for (const layout of layouts) {
+          for (const obj of layout) {
+            obj.motion = normalizeObjectMotion(
+              assetMotionState[obj.name] ?? config.assetMotion?.[obj.name]
+            );
+            if (obj.motion.type === "fixed") {
+              obj.velocity = { x: 0, y: 0, z: 0 };
+              obj.anchor = currentFixedAnchor(obj);
+              obj.local = { ...obj.anchor };
+            } else {
+              obj.anchor = { ...obj.local };
+            }
+          }
+        }
+        renderSphereSettings();
+      });
       renderSphereSettings();
 
       function stationZ(index: number) {
@@ -1029,6 +1139,59 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         }
       }
 
+      function resolveConfiguredAnchor(
+        name: string,
+        fallback: Vec3
+      ): {
+        anchor: Vec3;
+        mode: "absolute" | "camera-midpoint";
+        offset: Vec3;
+      } {
+        const raw = config.assetMotion?.[name]?.anchor;
+        const offset: Vec3 = {
+          x: Number(raw?.offset?.x) || 0,
+          y: Number(raw?.offset?.y) || 0,
+          z: Number(raw?.offset?.z) || 0
+        };
+
+        if (raw?.mode === "camera-midpoint") {
+          return {
+            anchor: { ...fallback },
+            mode: "camera-midpoint",
+            offset
+          };
+        }
+
+        const hasAbsolute =
+          Number.isFinite(Number(raw?.x)) ||
+          Number.isFinite(Number(raw?.y)) ||
+          Number.isFinite(Number(raw?.z));
+
+        return {
+          anchor: hasAbsolute
+            ? {
+                x: Number.isFinite(Number(raw?.x)) ? Number(raw.x) : fallback.x,
+                y: Number.isFinite(Number(raw?.y)) ? Number(raw.y) : fallback.y,
+                z: Number.isFinite(Number(raw?.z)) ? Number(raw.z) : fallback.z
+              }
+            : { ...fallback },
+          mode: "absolute",
+          offset
+        };
+      }
+
+      function currentFixedAnchor(obj: SceneObject) {
+        if (obj.anchorMode !== "camera-midpoint") return { ...obj.anchor };
+
+        const halfDistance = presentationSettings.camera.distanceFromCenter * 0.5;
+        const sign = obj.hemisphere === "back" ? -1 : 1;
+        return {
+          x: obj.anchorOffset?.x ?? 0,
+          y: obj.anchorOffset?.y ?? 0,
+          z: sign * halfDistance + (obj.anchorOffset?.z ?? 0)
+        };
+      }
+
       function generateLayout(station: any, index: number): SceneObject[] {
         const rand = rngFor(station, index);
         const discovered = Array.isArray(assetsByArtwork[station.artworkName])
@@ -1060,16 +1223,22 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         for (let i = 0; i < sceneItems.length; i++) {
           const asset = sceneItems[i].asset;
           const kind: "2d" | "3d" = asset?.kind === "2d" ? "2d" : "3d";
+          const objectName = asset?.name ?? `${station.artworkName}-proxy-${i + 1}`;
+          const initialLocal = kind === "3d" && asset
+            ? placeUploaded3d(uploaded3dIndex++, uploaded3dCount, threeSettings.layer)
+            : kind === "3d"
+              ? applyDepthLayer(randomPlacement(rand), threeSettings.layer)
+              : randomPlacement(rand);
+          const anchorConfig = resolveConfiguredAnchor(objectName, initialLocal);
+          const objectMotion = normalizeObjectMotion(
+            assetMotionState[objectName] ?? config.assetMotion?.[objectName]
+          );
           const obj: SceneObject = {
             id: `${station.id}-asset-${i}`,
-            name: asset?.name ?? `${station.artworkName}-proxy-${i + 1}`,
+            name: objectName,
             kind,
             url: asset?.url,
-            local: kind === "3d" && asset
-              ? placeUploaded3d(uploaded3dIndex++, uploaded3dCount, threeSettings.layer)
-              : kind === "3d"
-                ? applyDepthLayer(randomPlacement(rand), threeSettings.layer)
-                : randomPlacement(rand),
+            local: { ...initialLocal },
             velocity: { x: 0, y: 0, z: 0 },
             size: 0.42 + rand() * 0.7,
             shape: Math.floor(rand() * 4),
@@ -1079,10 +1248,20 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             action: asset ? assetActions[asset.name] : undefined,
             depthLayer: kind === "3d" ? threeSettings.layer : undefined,
             hideBehindImage: kind === "3d" ? threeSettings.hideBehindImage : undefined,
-            hemisphere: assetPlacement[asset?.name ?? `${station.artworkName}-proxy-${i + 1}`]?.hemisphere ?? "front",
-            visible: assetPlacement[asset?.name ?? `${station.artworkName}-proxy-${i + 1}`]?.visible ?? true
+            hemisphere: assetPlacement[objectName]?.hemisphere ?? "front",
+            visible: assetPlacement[objectName]?.visible ?? true,
+            motion: objectMotion,
+            anchor: anchorConfig.anchor,
+            anchorMode: anchorConfig.mode,
+            anchorOffset: anchorConfig.offset
           };
+          if (obj.motion.type === "fixed") {
+            obj.local = currentFixedAnchor(obj);
+          }
           enforceHemisphere(obj);
+          obj.anchor = obj.anchorMode === "camera-midpoint"
+            ? currentFixedAnchor(obj)
+            : { ...obj.local };
 
           if (kind === "2d" && asset?.url) {
             const image = new Image();
@@ -1424,17 +1603,30 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           for (const obj of layout) {
             if (obj.visible === false) continue;
             if (grabbed?.object === obj) continue;
-            obj.velocity.x *= damping;
-            obj.velocity.y *= damping;
-            obj.velocity.z *= damping;
 
-            const t = now * 0.001 * floatSpeed + obj.phase;
-            obj.velocity.y += Math.sin(t) * floatStrength * dt;
-            obj.velocity.x += Math.cos(t * 0.77) * floatStrength * 0.42 * dt;
+            if (obj.motion.type === "fixed") {
+              obj.velocity = { x: 0, y: 0, z: 0 };
+              const anchor = currentFixedAnchor(obj);
+              obj.anchor = { ...anchor };
+              obj.local = fixedPositionAtTime(
+                anchor,
+                obj.motion,
+                obj.phase,
+                now * 0.001
+              );
+            } else {
+              obj.velocity.x *= damping;
+              obj.velocity.y *= damping;
+              obj.velocity.z *= damping;
 
-            obj.local.x += obj.velocity.x * dt;
-            obj.local.y += obj.velocity.y * dt;
-            obj.local.z += obj.velocity.z * dt;
+              const t = now * 0.001 * floatSpeed + obj.phase;
+              obj.velocity.y += Math.sin(t) * floatStrength * dt;
+              obj.velocity.x += Math.cos(t * 0.77) * floatStrength * 0.42 * dt;
+
+              obj.local.x += obj.velocity.x * dt;
+              obj.local.y += obj.velocity.y * dt;
+              obj.local.z += obj.velocity.z * dt;
+            }
 
             if (obj.kind === "3d") obj.spin += obj.spinVelocity * dt;
             solveObjectBounds(stationIndex, obj);
@@ -1789,6 +1981,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
         const obj = findHitObject(pointerX, pointerY);
         if (obj) {
+          if (obj.motion.type === "fixed" && obj.motion.fixedMode === "anchored") return;
           grabbed = { stationIndex: arrivingAt, object: obj };
           dragLastX = pointerX;
           dragLastY = pointerY;
@@ -1815,9 +2008,16 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           obj.local.x += dx * sensitivity;
           obj.local.y -= dy * sensitivity;
 
-          const maxToss = Number(motion.maxTossSpeed) || 2.6;
-          obj.velocity.x = Math.max(-maxToss, Math.min(maxToss, (dx / dt) * 0.0025));
-          obj.velocity.y = Math.max(-maxToss, Math.min(maxToss, (-dy / dt) * 0.0025));
+          if (obj.motion.type === "fixed") {
+            obj.anchor = { ...obj.local };
+            obj.anchorMode = "absolute";
+            obj.anchorOffset = { x: 0, y: 0, z: 0 };
+            obj.velocity = { x: 0, y: 0, z: 0 };
+          } else {
+            const maxToss = Number(motion.maxTossSpeed) || 2.6;
+            obj.velocity.x = Math.max(-maxToss, Math.min(maxToss, (dx / dt) * 0.0025));
+            obj.velocity.y = Math.max(-maxToss, Math.min(maxToss, (-dy / dt) * 0.0025));
+          }
           draggedDistance += Math.hypot(dx, dy);
           solveObjectBounds(grabbed.stationIndex, obj);
 
@@ -2073,7 +2273,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   }
 
   .sphere-asset-add select,
-  .sphere-side-select {
+  .sphere-side-select,
+  .sphere-motion-select {
     min-height:38px;
     border:1px solid rgba(255,255,255,.16);
     border-radius:9px;
@@ -2100,7 +2301,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
   .sphere-asset-row {
     display:grid;
-    grid-template-columns:minmax(0,1fr) 92px 34px;
+    grid-template-columns:minmax(0,1fr) 82px 108px 34px;
     align-items:center;
     gap:8px;
     min-height:42px;
