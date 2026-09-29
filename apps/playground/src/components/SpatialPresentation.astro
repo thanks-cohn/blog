@@ -102,8 +102,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   declare global {
     interface Window {
       webrevPresentationSettings?: {
-        get(): PresentationSettingsSnapshot;
-        get(key: PresentationSettingKey): PresentationSettingValue;
+        get(key?: PresentationSettingKey): PresentationSettingsSnapshot | PresentationSettingValue;
         set(key: PresentationSettingKey, value: PresentationSettingValue): PresentationSettingsSnapshot;
         reset(key?: PresentationSettingKey): PresentationSettingsSnapshot;
         subscribe(listener: SettingsListener): () => void;
@@ -491,6 +490,22 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         return position;
       }
 
+      function placeUploaded3d(
+        assetIndex: number,
+        assetCount: number,
+        layer: "near" | "middle" | "far"
+      ): Vec3 {
+        const count = Math.max(1, assetCount);
+        const angle = -Math.PI / 2 + (assetIndex / count) * Math.PI * 2;
+        const ring = Math.max(2.4, Math.min(maxAssetDistance() * 0.58, 3.6));
+        const position: Vec3 = {
+          x: Math.cos(angle) * ring,
+          y: Math.sin(angle) * ring * 0.72,
+          z: 0
+        };
+        return applyDepthLayer(position, layer);
+      }
+
       function generateLayout(station: any, index: number): SceneObject[] {
         const rand = rngFor(station, index);
         const discovered = Array.isArray(assetsByArtwork[station.artworkName])
@@ -516,6 +531,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         ];
         const result: SceneObject[] = [];
         const threeSettings = resolve3dSettings(station);
+        const uploaded3dCount = discovered.filter((asset: any) => asset?.kind === "3d").length;
+        let uploaded3dIndex = 0;
 
         for (let i = 0; i < sceneItems.length; i++) {
           const asset = sceneItems[i].asset;
@@ -525,9 +542,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             name: asset?.name ?? `${station.artworkName}-proxy-${i + 1}`,
             kind,
             url: asset?.url,
-            local: kind === "3d"
-              ? applyDepthLayer(randomPlacement(rand), threeSettings.layer)
-              : randomPlacement(rand),
+            local: kind === "3d" && asset
+              ? placeUploaded3d(uploaded3dIndex++, uploaded3dCount, threeSettings.layer)
+              : kind === "3d"
+                ? applyDepthLayer(randomPlacement(rand), threeSettings.layer)
+                : randomPlacement(rand),
             velocity: { x: 0, y: 0, z: 0 },
             size: 0.42 + rand() * 0.7,
             shape: Math.floor(rand() * 4),
