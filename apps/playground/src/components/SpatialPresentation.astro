@@ -67,19 +67,27 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     </div>
 
     <div class="sphere-diameter-control">
-      <span>Hemisphere diameters</span>
+      <span>Sphere geometry</span>
       <div class="sphere-diameter-row">
         <label>
-          <span>Front</span>
-          <input id="front-diameter-input" type="number" min="0.2" step="0.2" inputmode="decimal" />
+          <span>Diameter</span>
+          <input id="sphere-diameter-input" type="number" min="0.2" step="0.2" inputmode="decimal" />
         </label>
         <label>
-          <span>Back</span>
-          <input id="back-diameter-input" type="number" min="0.2" step="0.2" inputmode="decimal" />
+          <span>Circumference</span>
+          <input id="sphere-circumference-input" type="number" min="0.2" step="0.2" inputmode="decimal" />
         </label>
       </div>
-      <span class="sphere-diameter-note">Image is the shared center plane · each outer edge is a collision wall</span>
+      <span class="sphere-diameter-note">The image is the sphere center. Front and Back are its two halves.</span>
     </div>
+
+    <label class="sphere-asset-add">
+      <span>Camera position</span>
+      <select id="camera-placement-select">
+        <option value="outside">Outside sphere</option>
+        <option value="inside">Inside sphere</option>
+      </select>
+    </label>
 
     <label class="sphere-asset-add">
       <span>Add / restore asset</span>
@@ -103,6 +111,15 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 <script>
   import * as THREE from "../vendor/three.module.min.js";
   import { GLTFLoader } from "../vendor/GLTFLoader.js";
+  import {
+    cameraDistanceForPlacement,
+    constrainBodyToHemisphereSphere,
+    maxBodyRadiusForSphere,
+    sphereFromCircumference,
+    sphereFromDiameter,
+    sphereFromRadius,
+    type CameraPlacement
+  } from "../lib/spatialSphere";
 
   type Vec3 = { x: number; y: number; z: number };
   type Projected = { x: number; y: number; depth: number; scale: number };
@@ -134,48 +151,33 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       min: Vec3;
       max: Vec3;
     };
+    modelRadius?: number;
     lastScreen?: { x: number; y: number; radius: number; depth: number };
   };
 
   type CameraMode = "locked" | "focus" | "free";
   type PresentationSettingKey =
     | "camera.mode"
-    | "camera.mouseMovesCamera"
-    | "assets.minDistanceFromCenter"
-    | "assets.maxDistanceFromCenter"
-    | "assets.sphereDiameter"
-    | "assets.frontDiameter"
-    | "assets.backDiameter"
-    | "collisions.viewport.enabled"
-    | "collisions.viewport.restitution"
-    | "collisions.viewport.paddingPx"
-    | "collisions.sphereInside.enabled"
-    | "collisions.sphereInside.restitution";
-  type PresentationSettingValue = boolean | number | CameraMode;
+    | "camera.placement"
+    | "camera.distanceFromCenter"
+    | "sphere.diameter"
+    | "sphere.radius"
+    | "sphere.circumference"
+    | "sphere.restitution";
+  type PresentationSettingValue = boolean | number | string;
   type AssetHemisphere = "front" | "back";
   type AssetPlacementState = Record<string, { hemisphere: AssetHemisphere; visible: boolean }>;
   type PresentationSettingsSnapshot = {
     camera: {
       mode: CameraMode;
-      mouseMovesCamera: boolean;
+      placement: CameraPlacement;
+      distanceFromCenter: number;
     };
-    assets: {
-      minDistanceFromCenter: number;
-      maxDistanceFromCenter: number;
-      sphereDiameter: number;
-      frontDiameter: number;
-      backDiameter: number;
-    };
-    collisions: {
-      viewport: {
-        enabled: boolean;
-        restitution: number;
-        paddingPx: number;
-      };
-      sphereInside: {
-        enabled: boolean;
-        restitution: number;
-      };
+    sphere: {
+      diameter: number;
+      radius: number;
+      circumference: number;
+      restitution: number;
     };
   };
   type SettingsListener = (settings: PresentationSettingsSnapshot) => void;
@@ -201,8 +203,9 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   const settingsPanel = document.getElementById("sphere-settings-panel") as HTMLElement | null;
   const settingsClose = document.getElementById("sphere-settings-close") as HTMLButtonElement | null;
   const sphereSizeReadout = document.getElementById("sphere-size-readout");
-  const frontDiameterInput = document.getElementById("front-diameter-input") as HTMLInputElement | null;
-  const backDiameterInput = document.getElementById("back-diameter-input") as HTMLInputElement | null;
+  const sphereDiameterInput = document.getElementById("sphere-diameter-input") as HTMLInputElement | null;
+  const sphereCircumferenceInput = document.getElementById("sphere-circumference-input") as HTMLInputElement | null;
+  const cameraPlacementSelect = document.getElementById("camera-placement-select") as HTMLSelectElement | null;
   const assetPicker = document.getElementById("sphere-asset-picker") as HTMLSelectElement | null;
   const frontAssetsList = document.getElementById("front-assets-list");
   const backAssetsList = document.getElementById("back-assets-list");
@@ -272,6 +275,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             z: normalizedBox.max.z
           }
         };
+        const normalizedSphere: any = normalizedBox.getBoundingSphere(new T3.Sphere());
+        obj.modelRadius = normalizedSphere.radius;
 
         const group: any = new T3.Group();
         group.add(root);
@@ -321,7 +326,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   if (root && canvas instanceof HTMLCanvasElement) {
     const gameCanvas: HTMLCanvasElement = canvas;
     const config = JSON.parse(root.dataset.config ?? "{}");
-    const settingsStorageKey = "webrev:presentation-settings:v1";
+    const settingsStorageKey = "webrev:spatial-settings:v2";
     const assetPlacementStorageKey = "webrev:asset-placement:v1";
 
     function allDiscoveredAssets() {
@@ -359,40 +364,46 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       } catch {}
       window.dispatchEvent(new CustomEvent("webrev:asset-placement", { detail: assetPlacement }));
     }
-    const defaultMinDistance = Math.max(
-      0,
-      Number(config.arrangement?.assetRange?.minDistanceFromCenter ?? config.arrangement?.influenceSphere?.innerRadius ?? 4.2)
+
+    const configuredDiameter = Number(
+      config.arrangement?.sphere?.diameter ??
+      config.arrangement?.assetRange?.sphereDiameter ??
+      ((config.arrangement?.influenceSphere?.radius ?? 6.4) * 2)
     );
-    const defaultMaxDistance = Math.max(
-      defaultMinDistance,
-      Number(config.arrangement?.assetRange?.maxDistanceFromCenter ?? config.arrangement?.influenceSphere?.radius ?? 6.4)
+    const configuredSphere = sphereFromDiameter(configuredDiameter);
+    const configuredPlacement: CameraPlacement =
+      config.arrangement?.camera?.placement === "inside" ? "inside" : "outside";
+    const configuredCameraDistance = cameraDistanceForPlacement(
+      configuredPlacement,
+      configuredSphere.radius,
+      Number(config.arrangement?.camera?.distanceFromCenter)
     );
+
     const settingDefaults: PresentationSettingsSnapshot = {
       camera: {
         mode:
-          config.arrangement?.controls?.cameraMode === "focus" ||
-          config.arrangement?.controls?.cameraMode === "free"
-            ? config.arrangement.controls.cameraMode
-            : "locked",
-        mouseMovesCamera: Boolean(config.arrangement?.controls?.mouseMovesCamera ?? false)
+          config.arrangement?.camera?.mode === "focus" || config.arrangement?.camera?.mode === "free"
+            ? config.arrangement.camera.mode
+            : config.arrangement?.controls?.cameraMode === "focus" || config.arrangement?.controls?.cameraMode === "free"
+              ? config.arrangement.controls.cameraMode
+              : "locked",
+        placement: configuredPlacement,
+        distanceFromCenter: configuredCameraDistance
       },
-      assets: {
-        minDistanceFromCenter: defaultMinDistance,
-        maxDistanceFromCenter: defaultMaxDistance,
-        sphereDiameter: Math.max(defaultMinDistance * 2, Number(config.arrangement?.assetRange?.sphereDiameter ?? defaultMaxDistance * 2)),
-        frontDiameter: Math.max(0.2, Number(config.arrangement?.assetRange?.frontDiameter ?? config.arrangement?.assetRange?.sphereDiameter ?? defaultMaxDistance * 2)),
-        backDiameter: Math.max(0.2, Number(config.arrangement?.assetRange?.backDiameter ?? config.arrangement?.assetRange?.sphereDiameter ?? defaultMaxDistance * 2))
-      },
-      collisions: {
-        viewport: {
-          enabled: Boolean(config.arrangement?.collisions?.viewport?.enabled ?? true),
-          restitution: Math.max(0, Math.min(1, Number(config.arrangement?.collisions?.viewport?.restitution ?? 0.72))),
-          paddingPx: Math.max(0, Number(config.arrangement?.collisions?.viewport?.paddingPx ?? 18))
-        },
-        sphereInside: {
-          enabled: Boolean(config.arrangement?.collisions?.sphereInside?.enabled ?? true),
-          restitution: Math.max(0, Math.min(1, Number(config.arrangement?.collisions?.sphereInside?.restitution ?? config.arrangement?.motion?.boundaryRestitution ?? 0.5)))
-        }
+      sphere: {
+        ...configuredSphere,
+        restitution: Math.max(
+          0,
+          Math.min(
+            1,
+            Number(
+              config.arrangement?.sphere?.collision?.restitution ??
+              config.arrangement?.collisions?.sphereInside?.restitution ??
+              config.arrangement?.motion?.boundaryRestitution ??
+              0.5
+            )
+          )
+        )
       }
     };
     const settingsListeners = new Set<SettingsListener>();
@@ -401,97 +412,55 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       return {
         camera: {
           mode: source.camera.mode,
-          mouseMovesCamera: Boolean(source.camera.mouseMovesCamera)
+          placement: source.camera.placement,
+          distanceFromCenter: Number(source.camera.distanceFromCenter)
         },
-        assets: {
-          minDistanceFromCenter: Number(source.assets.minDistanceFromCenter),
-          maxDistanceFromCenter: Number(source.assets.maxDistanceFromCenter),
-          sphereDiameter: Number(source.assets.sphereDiameter),
-          frontDiameter: Number(source.assets.frontDiameter),
-          backDiameter: Number(source.assets.backDiameter)
-        },
-        collisions: {
-          viewport: {
-            enabled: Boolean(source.collisions.viewport.enabled),
-            restitution: Number(source.collisions.viewport.restitution),
-            paddingPx: Number(source.collisions.viewport.paddingPx)
-          },
-          sphereInside: {
-            enabled: Boolean(source.collisions.sphereInside.enabled),
-            restitution: Number(source.collisions.sphereInside.restitution)
-          }
+        sphere: {
+          diameter: Number(source.sphere.diameter),
+          radius: Number(source.sphere.radius),
+          circumference: Number(source.sphere.circumference),
+          restitution: Number(source.sphere.restitution)
         }
       };
     }
 
+    function normalizeCameraForSphere(settings: PresentationSettingsSnapshot) {
+      settings.camera.distanceFromCenter = cameraDistanceForPlacement(
+        settings.camera.placement,
+        settings.sphere.radius,
+        settings.camera.distanceFromCenter
+      );
+    }
+
     function loadSettings(): PresentationSettingsSnapshot {
       try {
-        const raw = window.localStorage.getItem(settingsStorageKey);
-        if (!raw) return cloneSettings(settingDefaults);
-        const parsed = JSON.parse(raw);
-        const loadedMin = Number(parsed?.assets?.minDistanceFromCenter);
-        const loadedMax = Number(parsed?.assets?.maxDistanceFromCenter);
-        const minDistance = Number.isFinite(loadedMin)
-          ? Math.max(0, loadedMin)
-          : settingDefaults.assets.minDistanceFromCenter;
-        const maxDistance = Number.isFinite(loadedMax)
-          ? Math.max(minDistance, loadedMax)
-          : Math.max(minDistance, settingDefaults.assets.maxDistanceFromCenter);
-        const loadedDiameter = Number(parsed?.assets?.sphereDiameter);
-        const sphereDiameter = Number.isFinite(loadedDiameter)
-          ? Math.max(0.2, loadedDiameter)
-          : Math.max(0.2, maxDistance * 2);
-        const loadedFrontDiameter = Number(parsed?.assets?.frontDiameter);
-        const loadedBackDiameter = Number(parsed?.assets?.backDiameter);
-        const frontDiameter = Number.isFinite(loadedFrontDiameter)
-          ? Math.max(0.2, loadedFrontDiameter)
-          : settingDefaults.assets.frontDiameter;
-        const backDiameter = Number.isFinite(loadedBackDiameter)
-          ? Math.max(0.2, loadedBackDiameter)
-          : settingDefaults.assets.backDiameter;
-        const diameterRadius = Math.max(frontDiameter, backDiameter) / 2;
-        return {
+        const parsed = JSON.parse(window.localStorage.getItem(settingsStorageKey) ?? "{}");
+        const sphere = Number.isFinite(Number(parsed?.sphere?.diameter))
+          ? sphereFromDiameter(Number(parsed.sphere.diameter))
+          : configuredSphere;
+        const placement: CameraPlacement = parsed?.camera?.placement === "inside" ? "inside" : configuredPlacement;
+        const loaded: PresentationSettingsSnapshot = {
           camera: {
             mode:
               parsed?.camera?.mode === "focus" || parsed?.camera?.mode === "free"
                 ? parsed.camera.mode
-                : "locked",
-            mouseMovesCamera:
-              typeof parsed?.camera?.mouseMovesCamera === "boolean"
-                ? parsed.camera.mouseMovesCamera
-                : settingDefaults.camera.mouseMovesCamera
+                : settingDefaults.camera.mode,
+            placement,
+            distanceFromCenter: cameraDistanceForPlacement(
+              placement,
+              sphere.radius,
+              Number(parsed?.camera?.distanceFromCenter)
+            )
           },
-          assets: {
-            minDistanceFromCenter: minDistance,
-            maxDistanceFromCenter: Math.max(minDistance, diameterRadius),
-            sphereDiameter,
-            frontDiameter,
-            backDiameter
-          },
-          collisions: {
-            viewport: {
-              enabled:
-                typeof parsed?.collisions?.viewport?.enabled === "boolean"
-                  ? parsed.collisions.viewport.enabled
-                  : settingDefaults.collisions.viewport.enabled,
-              restitution: Number.isFinite(Number(parsed?.collisions?.viewport?.restitution))
-                ? Math.max(0, Math.min(1, Number(parsed.collisions.viewport.restitution)))
-                : settingDefaults.collisions.viewport.restitution,
-              paddingPx: Number.isFinite(Number(parsed?.collisions?.viewport?.paddingPx))
-                ? Math.max(0, Number(parsed.collisions.viewport.paddingPx))
-                : settingDefaults.collisions.viewport.paddingPx
-            },
-            sphereInside: {
-              enabled:
-                typeof parsed?.collisions?.sphereInside?.enabled === "boolean"
-                  ? parsed.collisions.sphereInside.enabled
-                  : settingDefaults.collisions.sphereInside.enabled,
-              restitution: Number.isFinite(Number(parsed?.collisions?.sphereInside?.restitution))
-                ? Math.max(0, Math.min(1, Number(parsed.collisions.sphereInside.restitution)))
-                : settingDefaults.collisions.sphereInside.restitution
-            }
+          sphere: {
+            ...sphere,
+            restitution: Number.isFinite(Number(parsed?.sphere?.restitution))
+              ? Math.max(0, Math.min(1, Number(parsed.sphere.restitution)))
+              : settingDefaults.sphere.restitution
           }
         };
+        normalizeCameraForSphere(loaded);
+        return loaded;
       } catch {
         return cloneSettings(settingDefaults);
       }
@@ -509,127 +478,69 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       return snapshot;
     }
 
+    function applySphereGeometry(next: ReturnType<typeof sphereFromDiameter>) {
+      presentationSettings.sphere.diameter = next.diameter;
+      presentationSettings.sphere.radius = next.radius;
+      presentationSettings.sphere.circumference = next.circumference;
+      normalizeCameraForSphere(presentationSettings);
+    }
+
     window.webrevPresentationSettings = {
       get(key?: PresentationSettingKey) {
         if (key === "camera.mode") return presentationSettings.camera.mode;
-        if (key === "camera.mouseMovesCamera") return presentationSettings.camera.mouseMovesCamera;
-        if (key === "assets.minDistanceFromCenter") return presentationSettings.assets.minDistanceFromCenter;
-        if (key === "assets.maxDistanceFromCenter") return presentationSettings.assets.maxDistanceFromCenter;
-        if (key === "assets.sphereDiameter") return presentationSettings.assets.sphereDiameter;
-        if (key === "assets.frontDiameter") return presentationSettings.assets.frontDiameter;
-        if (key === "assets.backDiameter") return presentationSettings.assets.backDiameter;
-        if (key === "collisions.viewport.enabled") return presentationSettings.collisions.viewport.enabled;
-        if (key === "collisions.viewport.restitution") return presentationSettings.collisions.viewport.restitution;
-        if (key === "collisions.viewport.paddingPx") return presentationSettings.collisions.viewport.paddingPx;
-        if (key === "collisions.sphereInside.enabled") return presentationSettings.collisions.sphereInside.enabled;
-        if (key === "collisions.sphereInside.restitution") return presentationSettings.collisions.sphereInside.restitution;
+        if (key === "camera.placement") return presentationSettings.camera.placement;
+        if (key === "camera.distanceFromCenter") return presentationSettings.camera.distanceFromCenter;
+        if (key === "sphere.diameter") return presentationSettings.sphere.diameter;
+        if (key === "sphere.radius") return presentationSettings.sphere.radius;
+        if (key === "sphere.circumference") return presentationSettings.sphere.circumference;
+        if (key === "sphere.restitution") return presentationSettings.sphere.restitution;
         return cloneSettings(presentationSettings);
       },
       set(key: PresentationSettingKey, value: PresentationSettingValue) {
         if (key === "camera.mode") {
           presentationSettings.camera.mode =
             value === "focus" || value === "free" ? value : "locked";
-          presentationSettings.camera.mouseMovesCamera = presentationSettings.camera.mode !== "locked";
-        } else if (key === "camera.mouseMovesCamera") {
-          presentationSettings.camera.mouseMovesCamera = Boolean(value);
-          presentationSettings.camera.mode = presentationSettings.camera.mouseMovesCamera ? "focus" : "locked";
-        } else if (key === "assets.minDistanceFromCenter") {
-          const next = Math.max(0, Number(value) || 0);
-          presentationSettings.assets.minDistanceFromCenter = Math.min(
-            next,
-            presentationSettings.assets.maxDistanceFromCenter
+        } else if (key === "camera.placement") {
+          presentationSettings.camera.placement = value === "inside" ? "inside" : "outside";
+          presentationSettings.camera.distanceFromCenter = cameraDistanceForPlacement(
+            presentationSettings.camera.placement,
+            presentationSettings.sphere.radius
           );
-          presentationSettings.assets.sphereDiameter = Math.max(
-            presentationSettings.assets.sphereDiameter,
-            presentationSettings.assets.minDistanceFromCenter * 2
+        } else if (key === "camera.distanceFromCenter") {
+          presentationSettings.camera.distanceFromCenter = cameraDistanceForPlacement(
+            presentationSettings.camera.placement,
+            presentationSettings.sphere.radius,
+            Number(value)
           );
-        } else if (key === "assets.maxDistanceFromCenter") {
-          const next = Math.max(0, Number(value) || 0);
-          presentationSettings.assets.maxDistanceFromCenter = Math.max(
-            next,
-            presentationSettings.assets.minDistanceFromCenter
-          );
-          presentationSettings.assets.sphereDiameter = presentationSettings.assets.maxDistanceFromCenter * 2;
-        } else if (key === "assets.sphereDiameter") {
-          const nextDiameter = Math.max(0.2, Number(value) || 0.2);
-          presentationSettings.assets.sphereDiameter = nextDiameter;
-          presentationSettings.assets.frontDiameter = nextDiameter;
-          presentationSettings.assets.backDiameter = nextDiameter;
-          presentationSettings.assets.maxDistanceFromCenter = nextDiameter / 2;
-        } else if (key === "assets.frontDiameter") {
-          presentationSettings.assets.frontDiameter = Math.max(0.2, Number(value) || 0.2);
-          presentationSettings.assets.sphereDiameter = Math.max(
-            presentationSettings.assets.frontDiameter,
-            presentationSettings.assets.backDiameter
-          );
-          presentationSettings.assets.maxDistanceFromCenter = presentationSettings.assets.sphereDiameter / 2;
-        } else if (key === "assets.backDiameter") {
-          presentationSettings.assets.backDiameter = Math.max(0.2, Number(value) || 0.2);
-          presentationSettings.assets.sphereDiameter = Math.max(
-            presentationSettings.assets.frontDiameter,
-            presentationSettings.assets.backDiameter
-          );
-          presentationSettings.assets.maxDistanceFromCenter = presentationSettings.assets.sphereDiameter / 2;
-        } else if (key === "collisions.viewport.enabled") {
-          presentationSettings.collisions.viewport.enabled = Boolean(value);
-        } else if (key === "collisions.viewport.restitution") {
-          presentationSettings.collisions.viewport.restitution = Math.max(0, Math.min(1, Number(value) || 0));
-        } else if (key === "collisions.viewport.paddingPx") {
-          presentationSettings.collisions.viewport.paddingPx = Math.max(0, Number(value) || 0);
-        } else if (key === "collisions.sphereInside.enabled") {
-          presentationSettings.collisions.sphereInside.enabled = Boolean(value);
-        } else if (key === "collisions.sphereInside.restitution") {
-          presentationSettings.collisions.sphereInside.restitution = Math.max(0, Math.min(1, Number(value) || 0));
+        } else if (key === "sphere.diameter") {
+          applySphereGeometry(sphereFromDiameter(Number(value)));
+        } else if (key === "sphere.radius") {
+          applySphereGeometry(sphereFromRadius(Number(value)));
+        } else if (key === "sphere.circumference") {
+          applySphereGeometry(sphereFromCircumference(Number(value)));
+        } else if (key === "sphere.restitution") {
+          presentationSettings.sphere.restitution = Math.max(0, Math.min(1, Number(value) || 0));
         }
         return publishSettings();
       },
       reset(key?: PresentationSettingKey) {
-        if (!key || key === "camera.mode") {
-          presentationSettings.camera.mode = settingDefaults.camera.mode;
-        }
-        if (!key || key === "camera.mouseMovesCamera") {
-          presentationSettings.camera.mouseMovesCamera = settingDefaults.camera.mouseMovesCamera;
-        }
         if (!key) {
-          presentationSettings.camera.mouseMovesCamera = presentationSettings.camera.mode !== "locked";
+          presentationSettings = cloneSettings(settingDefaults);
+          return publishSettings();
         }
-        if (!key || key === "assets.minDistanceFromCenter") {
-          presentationSettings.assets.minDistanceFromCenter = settingDefaults.assets.minDistanceFromCenter;
+        if (key === "camera.mode") presentationSettings.camera.mode = settingDefaults.camera.mode;
+        if (key === "camera.placement") {
+          presentationSettings.camera.placement = settingDefaults.camera.placement;
+          presentationSettings.camera.distanceFromCenter = settingDefaults.camera.distanceFromCenter;
         }
-        if (!key || key === "assets.maxDistanceFromCenter") {
-          presentationSettings.assets.maxDistanceFromCenter = settingDefaults.assets.maxDistanceFromCenter;
-          presentationSettings.assets.sphereDiameter = settingDefaults.assets.maxDistanceFromCenter * 2;
+        if (key === "camera.distanceFromCenter") {
+          presentationSettings.camera.distanceFromCenter = settingDefaults.camera.distanceFromCenter;
         }
-        if (!key || key === "assets.sphereDiameter") {
-          presentationSettings.assets.sphereDiameter = settingDefaults.assets.sphereDiameter;
-          presentationSettings.assets.frontDiameter = settingDefaults.assets.frontDiameter;
-          presentationSettings.assets.backDiameter = settingDefaults.assets.backDiameter;
-          presentationSettings.assets.maxDistanceFromCenter = Math.max(
-            settingDefaults.assets.frontDiameter,
-            settingDefaults.assets.backDiameter
-          ) / 2;
+        if (key === "sphere.diameter" || key === "sphere.radius" || key === "sphere.circumference") {
+          applySphereGeometry(sphereFromDiameter(settingDefaults.sphere.diameter));
         }
-        if (!key || key === "assets.frontDiameter") {
-          presentationSettings.assets.frontDiameter = settingDefaults.assets.frontDiameter;
-        }
-        if (!key || key === "assets.backDiameter") {
-          presentationSettings.assets.backDiameter = settingDefaults.assets.backDiameter;
-        }
-        if (!key || key === "collisions.viewport.enabled") {
-          presentationSettings.collisions.viewport.enabled = settingDefaults.collisions.viewport.enabled;
-        }
-        if (!key || key === "collisions.viewport.restitution") {
-          presentationSettings.collisions.viewport.restitution = settingDefaults.collisions.viewport.restitution;
-        }
-        if (!key || key === "collisions.viewport.paddingPx") {
-          presentationSettings.collisions.viewport.paddingPx = settingDefaults.collisions.viewport.paddingPx;
-        }
-        if (!key || key === "collisions.sphereInside.enabled") {
-          presentationSettings.collisions.sphereInside.enabled = settingDefaults.collisions.sphereInside.enabled;
-        }
-        if (!key || key === "collisions.sphereInside.restitution") {
-          presentationSettings.collisions.sphereInside.restitution = settingDefaults.collisions.sphereInside.restitution;
-        }
+        if (key === "sphere.restitution") presentationSettings.sphere.restitution = settingDefaults.sphere.restitution;
+        normalizeCameraForSphere(presentationSettings);
         return publishSettings();
       },
       subscribe(listener: SettingsListener) {
@@ -673,36 +584,33 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       const arrangement = config.arrangement;
       const billboard = arrangement.billboard2d ?? {};
       const motion = arrangement.motion ?? {};
-      const sphere = arrangement.influenceSphere;
+      const sphere = arrangement.sphere ?? arrangement.influenceSphere ?? { defaultObjectCount: 12 };
       const exclusion = arrangement.viewportExclusion;
       const spacing = Number(rail.stationSpacing) || 26;
       const rideSpeed = Number(rail.speed) || 7.5;
       const prismRadius = Number(rail.prismRadius) || 3.4;
 
-      function minAssetDistance() {
-        return Math.max(0, Number(presentationSettings.assets.minDistanceFromCenter) || 0);
+      function sphereRadius() {
+        return presentationSettings.sphere.radius;
       }
 
-      function maxAssetDistance() {
-        return Math.max(0.1, Number(presentationSettings.assets.maxDistanceFromCenter) || 0.01);
+      function objectBodyRadius(obj: SceneObject) {
+        if (obj.kind === "3d" && Number.isFinite(obj.modelRadius)) {
+          return Math.max(0.02, Number(obj.modelRadius) * obj.size);
+        }
+        return Math.max(0.02, obj.size);
       }
 
-      function hemisphereRadius(side: AssetHemisphere) {
-        const diameter = side === "back"
-          ? presentationSettings.assets.backDiameter
-          : presentationSettings.assets.frontDiameter;
-        return Math.max(0.1, Number(diameter) / 2);
-      }
 
       let width = 1;
       let height = 1;
       let cameraZ = 9;
-      let targetZ = stationZ(0) + 8.5;
+      let targetZ = stationZ(0) + presentationSettings.camera.distanceFromCenter;
       let arrivingAt = 0;
       let lookYaw = 0;
-      let lookPitch = -0.02;
+      let lookPitch = 0;
       let targetYaw = 0;
-      let targetPitch = -0.02;
+      let targetPitch = 0;
       let pointerX = 0;
       let pointerY = 0;
       let previous = performance.now();
@@ -764,12 +672,15 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       function renderSphereSettings() {
         if (!frontAssetsList || !backAssetsList || !assetPicker || !sphereSizeReadout) return;
         sphereSizeReadout.textContent =
-          `Front radius ${hemisphereRadius("front").toFixed(1)} · Back radius ${hemisphereRadius("back").toFixed(1)}`;
-        if (frontDiameterInput && document.activeElement !== frontDiameterInput) {
-          frontDiameterInput.value = presentationSettings.assets.frontDiameter.toFixed(1);
+          `Radius ${presentationSettings.sphere.radius.toFixed(2)} · collision boundary = sphere surface`;
+        if (sphereDiameterInput && document.activeElement !== sphereDiameterInput) {
+          sphereDiameterInput.value = presentationSettings.sphere.diameter.toFixed(2);
         }
-        if (backDiameterInput && document.activeElement !== backDiameterInput) {
-          backDiameterInput.value = presentationSettings.assets.backDiameter.toFixed(1);
+        if (sphereCircumferenceInput && document.activeElement !== sphereCircumferenceInput) {
+          sphereCircumferenceInput.value = presentationSettings.sphere.circumference.toFixed(2);
+        }
+        if (cameraPlacementSelect) {
+          cameraPlacementSelect.value = presentationSettings.camera.placement;
         }
 
         frontAssetsList.replaceChildren();
@@ -819,56 +730,63 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         window.webrevPresentationSettings?.setAssetVisible(name, true);
         assetPicker.value = "";
       });
-      function commitHemisphereDiameter(
+      function commitSphereInput(
         input: HTMLInputElement,
-        key: "assets.frontDiameter" | "assets.backDiameter",
+        key: "sphere.diameter" | "sphere.circumference",
         fallback: () => number
       ) {
         const value = Number(input.value);
-        if (!Number.isFinite(value)) {
-          input.value = fallback().toFixed(1);
+        if (!Number.isFinite(value) || value <= 0) {
+          input.value = fallback().toFixed(2);
           return;
         }
         window.webrevPresentationSettings?.set(key, value);
-        input.value = Number(
-          window.webrevPresentationSettings?.get(key) ?? fallback()
-        ).toFixed(1);
       }
 
-      frontDiameterInput?.addEventListener("change", () => {
-        commitHemisphereDiameter(
-          frontDiameterInput,
-          "assets.frontDiameter",
-          () => presentationSettings.assets.frontDiameter
+      sphereDiameterInput?.addEventListener("change", () => {
+        commitSphereInput(
+          sphereDiameterInput,
+          "sphere.diameter",
+          () => presentationSettings.sphere.diameter
         );
       });
-      frontDiameterInput?.addEventListener("keydown", (event) => {
+      sphereDiameterInput?.addEventListener("keydown", (event) => {
         if (event.key !== "Enter") return;
         event.preventDefault();
-        commitHemisphereDiameter(
-          frontDiameterInput,
-          "assets.frontDiameter",
-          () => presentationSettings.assets.frontDiameter
+        commitSphereInput(
+          sphereDiameterInput,
+          "sphere.diameter",
+          () => presentationSettings.sphere.diameter
         );
       });
 
-      backDiameterInput?.addEventListener("change", () => {
-        commitHemisphereDiameter(
-          backDiameterInput,
-          "assets.backDiameter",
-          () => presentationSettings.assets.backDiameter
+      sphereCircumferenceInput?.addEventListener("change", () => {
+        commitSphereInput(
+          sphereCircumferenceInput,
+          "sphere.circumference",
+          () => presentationSettings.sphere.circumference
         );
       });
-      backDiameterInput?.addEventListener("keydown", (event) => {
+      sphereCircumferenceInput?.addEventListener("keydown", (event) => {
         if (event.key !== "Enter") return;
         event.preventDefault();
-        commitHemisphereDiameter(
-          backDiameterInput,
-          "assets.backDiameter",
-          () => presentationSettings.assets.backDiameter
+        commitSphereInput(
+          sphereCircumferenceInput,
+          "sphere.circumference",
+          () => presentationSettings.sphere.circumference
         );
       });
-      window.addEventListener("webrev:presentation-settings", renderSphereSettings);
+
+      cameraPlacementSelect?.addEventListener("change", () => {
+        window.webrevPresentationSettings?.set(
+          "camera.placement",
+          cameraPlacementSelect.value === "inside" ? "inside" : "outside"
+        );
+      });
+      window.addEventListener("webrev:presentation-settings", () => {
+        targetZ = stationZ(arrivingAt) + presentationSettings.camera.distanceFromCenter;
+        renderSphereSettings();
+      });
       window.addEventListener("webrev:asset-placement", () => {
         syncAssetPlacementToLayouts();
         renderSphereSettings();
@@ -910,24 +828,17 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       }
 
       function randomPlacement(rand: () => number): Vec3 {
-        const outer = maxAssetDistance();
-        const inner = Math.min(outer, minAssetDistance());
-        let point: Vec3 = { x: outer, y: 0, z: 0 };
-
-        for (let attempt = 0; attempt < 100; attempt++) {
-          const radius = inner + (outer - inner) * Math.cbrt(rand());
-          const theta = rand() * Math.PI * 2;
-          const cosPhi = rand() * 2 - 1;
-          const sinPhi = Math.sqrt(Math.max(0, 1 - cosPhi * cosPhi));
-          point = {
-            x: Math.cos(theta) * sinPhi * radius,
-            y: cosPhi * radius,
-            z: Math.sin(theta) * sinPhi * radius
-          };
-          if (!insideProtectedViewport(point)) return point;
-        }
-
-        return { x: outer, y: 0, z: 0 };
+        const outer = sphereRadius() * 0.72;
+        const inner = sphereRadius() * 0.28;
+        const radius = inner + (outer - inner) * Math.cbrt(rand());
+        const theta = rand() * Math.PI * 2;
+        const cosPhi = rand() * 2 - 1;
+        const sinPhi = Math.sqrt(Math.max(0, 1 - cosPhi * cosPhi));
+        return {
+          x: Math.cos(theta) * sinPhi * radius,
+          y: cosPhi * radius,
+          z: Math.sin(theta) * sinPhi * radius
+        };
       }
 
       function resolve3dSettings(station: any) {
@@ -949,9 +860,9 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (layer === "near") {
           position.x *= 0.5;
           position.y *= 0.5;
-          position.z = Math.abs(position.z) * 0.24 + maxAssetDistance() * 0.30;
+          position.z = Math.abs(position.z) * 0.24 + sphereRadius() * 0.30;
         } else if (layer === "far") {
-          position.z = -Math.abs(position.z) * 0.45 - maxAssetDistance() * 0.34;
+          position.z = -Math.abs(position.z) * 0.45 - sphereRadius() * 0.34;
         } else {
           position.z *= 0.3;
         }
@@ -965,7 +876,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       ): Vec3 {
         const count = Math.max(1, assetCount);
         const angle = -Math.PI / 2 + (assetIndex / count) * Math.PI * 2;
-        const ring = Math.max(2.4, Math.min(maxAssetDistance() * 0.58, 3.6));
+        const ring = Math.max(2.4, Math.min(sphereRadius() * 0.58, 3.6));
         const position: Vec3 = {
           x: Math.cos(angle) * ring,
           y: Math.sin(angle) * ring * 0.72,
@@ -976,10 +887,9 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
       function enforceHemisphere(obj: SceneObject) {
         if (!obj.url) return;
-        const magnitude = Math.max(Math.abs(obj.local.z), Math.max(0.45, minAssetDistance() * 0.2));
+        const minimum = Math.max(0.02, objectBodyRadius(obj));
+        const magnitude = Math.max(Math.abs(obj.local.z), minimum);
         obj.local.z = obj.hemisphere === "back" ? -magnitude : magnitude;
-        if (obj.hemisphere === "back" && obj.velocity.z > 0) obj.velocity.z *= -1;
-        if (obj.hemisphere !== "back" && obj.velocity.z < 0) obj.velocity.z *= -1;
       }
 
       function syncAssetPlacementToLayouts() {
@@ -1107,8 +1017,12 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       }
 
       function cameraPosition(): Vec3 {
-        const p = topFacePoint(cameraZ);
-        return { x: p.x, y: p.y + 0.35, z: cameraZ };
+        const center = stationCenter(arrivingAt);
+        return {
+          x: center.x,
+          y: center.y,
+          z: center.z + (cameraZ - stationZ(arrivingAt))
+        };
       }
 
       function cameraSpace(point: Vec3) {
@@ -1128,43 +1042,6 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const z2 = dy * sp + z1 * cp;
 
         return { x: x1, y: y2, z: z2, depth: -z2 };
-      }
-
-      function moveAlongViewDepth(center: Vec3, obj: SceneObject, deltaDepth: number) {
-        if (deltaDepth <= 0) return;
-
-        // Convert a camera-space move straight away from the camera back into world space.
-        const cp = Math.cos(lookPitch);
-        const sp = Math.sin(lookPitch);
-        const cy = Math.cos(lookYaw);
-        const sy = Math.sin(lookYaw);
-
-        const cameraDx = 0;
-        const cameraDy = 0;
-        const cameraDz = -deltaDepth;
-
-        const pitchedY = cameraDy * cp + cameraDz * sp;
-        const pitchedZ = -cameraDy * sp + cameraDz * cp;
-
-        const worldX = cameraDx * cy + pitchedZ * sy;
-        const worldZ = -cameraDx * sy + pitchedZ * cy;
-
-        obj.local.x += worldX;
-        obj.local.y += pitchedY;
-        obj.local.z += worldZ;
-
-        // Kill only the velocity component that would immediately cross the near wall again.
-        const world = {
-          x: center.x + obj.local.x,
-          y: center.y + obj.local.y,
-          z: center.z + obj.local.z
-        };
-        const before = cameraSpace(world);
-        if (before.depth < 0.8) {
-          obj.velocity.x *= 0.5;
-          obj.velocity.y *= 0.5;
-          obj.velocity.z *= 0.5;
-        }
       }
 
       function project(point: Vec3): Projected | null {
@@ -1229,193 +1106,35 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       }
 
       function constrainToSphere(obj: SceneObject) {
-        const p = obj.local;
-        const d = Math.hypot(p.x, p.y, p.z);
-        if (d <= 0.0001) return;
+        const radius = sphereRadius();
+        let bodyRadius = objectBodyRadius(obj);
+        const maximumBodyRadius = maxBodyRadiusForSphere(radius);
 
-        const side: AssetHemisphere = obj.hemisphere === "back" ? "back" : "front";
-        const wallRadius = Math.max(0.1, hemisphereRadius(side) - obj.size * 0.35);
-        if (d <= wallRadius) return;
+        // If the sphere is resized smaller than an existing model, fit the model
+        // first. This preserves the invariant that the complete GLB remains inside.
+        if (bodyRadius > maximumBodyRadius && bodyRadius > 0) {
+          obj.size *= maximumBodyRadius / bodyRadius;
+          bodyRadius = maximumBodyRadius;
+        }
 
-        const nx = p.x / d, ny = p.y / d, nz = p.z / d;
-        obj.local.x = nx * wallRadius;
-        obj.local.y = ny * wallRadius;
-        obj.local.z = nz * wallRadius;
+        const constrained = constrainBodyToHemisphereSphere(
+          {
+            position: obj.local,
+            velocity: obj.velocity
+          },
+          obj.hemisphere === "back" ? "back" : "front",
+          radius,
+          bodyRadius,
+          presentationSettings.sphere.restitution
+        );
+
+        obj.local = constrained.position;
+        obj.velocity = constrained.velocity;
+      }
+
+      function solveObjectBounds(obj: SceneObject) {
         enforceHemisphere(obj);
-
-        const vn = obj.velocity.x * nx + obj.velocity.y * ny + obj.velocity.z * nz;
-        if (vn > 0) {
-          const restitution = presentationSettings.collisions.sphereInside.restitution;
-          obj.velocity.x -= (1 + restitution) * vn * nx;
-          obj.velocity.y -= (1 + restitution) * vn * ny;
-          obj.velocity.z -= (1 + restitution) * vn * nz;
-        }
-      }
-
-      function projectedObjectBounds(center: Vec3, obj: SceneObject) {
-        if (obj.kind !== "3d" || !obj.modelBounds) return null;
-
-        const b = obj.modelBounds;
-        const corners = [
-          [b.min.x, b.min.y, b.min.z],
-          [b.min.x, b.min.y, b.max.z],
-          [b.min.x, b.max.y, b.min.z],
-          [b.min.x, b.max.y, b.max.z],
-          [b.max.x, b.min.y, b.min.z],
-          [b.max.x, b.min.y, b.max.z],
-          [b.max.x, b.max.y, b.min.z],
-          [b.max.x, b.max.y, b.max.z]
-        ];
-
-        const cos = Math.cos(obj.spin);
-        const sin = Math.sin(obj.spin);
-        let minX = Infinity, minY = Infinity;
-        let maxX = -Infinity, maxY = -Infinity;
-        let visibleCorners = 0;
-
-        for (const [bx, by, bz] of corners) {
-          // Match the Three.js group transform: scale, then Y rotation, then translation.
-          const sx = bx * obj.size;
-          const sy = by * obj.size;
-          const sz = bz * obj.size;
-          const rx = sx * cos + sz * sin;
-          const rz = -sx * sin + sz * cos;
-          const p = project({
-            x: center.x + obj.local.x + rx,
-            y: center.y + obj.local.y + sy,
-            z: center.z + obj.local.z + rz
-          });
-          if (!p) continue;
-          visibleCorners++;
-          minX = Math.min(minX, p.x);
-          minY = Math.min(minY, p.y);
-          maxX = Math.max(maxX, p.x);
-          maxY = Math.max(maxY, p.y);
-        }
-
-        if (!visibleCorners || !Number.isFinite(minX) || !Number.isFinite(minY)) return null;
-        return { minX, minY, maxX, maxY };
-      }
-
-      function constrainToViewport(center: Vec3, obj: SceneObject) {
-        if (!presentationSettings.collisions.viewport.enabled) return;
-
-        let world = {
-          x: center.x + obj.local.x,
-          y: center.y + obj.local.y,
-          z: center.z + obj.local.z
-        };
-
-        // The viewport includes a near wall. If an asset reaches the camera plane,
-        // screen projection ceases to exist, so repair depth before x/y clamping.
-        const space = cameraSpace(world);
-        const safeDepth = Math.max(0.9, obj.size * 1.35);
-        if (space.depth < safeDepth) {
-          moveAlongViewDepth(center, obj, safeDepth - space.depth);
-          enforceHemisphere(obj);
-          world = {
-            x: center.x + obj.local.x,
-            y: center.y + obj.local.y,
-            z: center.z + obj.local.z
-          };
-        }
-
-        const projected = project(world);
-        if (!projected) return;
-
-        const pad = presentationSettings.collisions.viewport.paddingPx;
-        const actualBounds = projectedObjectBounds(center, obj);
-        const baseRadius = Math.max(8, obj.size * projected.scale);
-        const fallbackRadius = obj.kind === "3d"
-          ? Math.max(baseRadius * 2.5, 32)
-          : baseRadius;
-        const restitution = presentationSettings.collisions.viewport.restitution;
-
-        let correctionX = 0;
-        let correctionY = 0;
-
-        if (actualBounds) {
-          if (actualBounds.minX < pad) correctionX = pad - actualBounds.minX;
-          else if (actualBounds.maxX > width - pad) correctionX = (width - pad) - actualBounds.maxX;
-
-          if (actualBounds.minY < pad) correctionY = pad - actualBounds.minY;
-          else if (actualBounds.maxY > height - pad) correctionY = (height - pad) - actualBounds.maxY;
-        } else {
-          const minX = pad + fallbackRadius;
-          const maxX = width - pad - fallbackRadius;
-          const minY = pad + fallbackRadius;
-          const maxY = height - pad - fallbackRadius;
-
-          if (projected.x < minX) correctionX = minX - projected.x;
-          else if (projected.x > maxX) correctionX = maxX - projected.x;
-
-          if (projected.y < minY) correctionY = minY - projected.y;
-          else if (projected.y > maxY) correctionY = maxY - projected.y;
-        }
-
-        if (correctionX === 0 && correctionY === 0) return;
-
-        // Convert screen-space correction back into local world-space at this depth.
-        const worldPerPixel = 1 / Math.max(projected.scale, 0.0001);
-        obj.local.x += correctionX * worldPerPixel;
-        obj.local.y -= correctionY * worldPerPixel;
-
-        // Perspective can slightly change after the first correction. Clamp once
-        // more against the same screen envelope so fast-moving objects cannot
-        // tunnel past the edge between frames.
-        const corrected = project({
-          x: center.x + obj.local.x,
-          y: center.y + obj.local.y,
-          z: center.z + obj.local.z
-        });
-        if (corrected) {
-          const correctedWorldPerPixel = 1 / Math.max(corrected.scale, 0.0001);
-          const correctedBounds = projectedObjectBounds(center, obj);
-
-          if (correctedBounds) {
-            if (correctedBounds.minX < pad) obj.local.x += (pad - correctedBounds.minX) * correctedWorldPerPixel;
-            else if (correctedBounds.maxX > width - pad) obj.local.x += ((width - pad) - correctedBounds.maxX) * correctedWorldPerPixel;
-
-            if (correctedBounds.minY < pad) obj.local.y -= (pad - correctedBounds.minY) * correctedWorldPerPixel;
-            else if (correctedBounds.maxY > height - pad) obj.local.y -= ((height - pad) - correctedBounds.maxY) * correctedWorldPerPixel;
-          } else {
-            const correctedRadius = obj.kind === "3d"
-              ? Math.max(Math.max(8, obj.size * corrected.scale) * 2.5, 32)
-              : Math.max(8, obj.size * corrected.scale);
-            const correctedMinX = pad + correctedRadius;
-            const correctedMaxX = width - pad - correctedRadius;
-            const correctedMinY = pad + correctedRadius;
-            const correctedMaxY = height - pad - correctedRadius;
-
-            if (corrected.x < correctedMinX) obj.local.x += (correctedMinX - corrected.x) * correctedWorldPerPixel;
-            else if (corrected.x > correctedMaxX) obj.local.x += (correctedMaxX - corrected.x) * correctedWorldPerPixel;
-
-            if (corrected.y < correctedMinY) obj.local.y -= (correctedMinY - corrected.y) * correctedWorldPerPixel;
-            else if (corrected.y > correctedMaxY) obj.local.y -= (correctedMaxY - corrected.y) * correctedWorldPerPixel;
-          }
-        }
-
-        if (correctionX !== 0) obj.velocity.x *= -restitution;
-        if (correctionY !== 0) obj.velocity.y *= -restitution;
-      }
-
-      function solveObjectBounds(center: Vec3, obj: SceneObject) {
-        // Sphere and viewport constraints can push against one another. Resolve
-        // them together for a few bounded passes instead of letting the last one win.
-        for (let pass = 0; pass < 5; pass++) {
-          enforceHemisphere(obj);
-          if (presentationSettings.collisions.sphereInside.enabled) {
-            constrainToSphere(obj);
-          }
-          constrainToViewport(center, obj);
-        }
-
-        // Final sphere clamp guarantees a viewport correction cannot leave the
-        // object outside its assigned hemisphere's hard outer wall.
-        enforceHemisphere(obj);
-        if (presentationSettings.collisions.sphereInside.enabled) {
-          constrainToSphere(obj);
-        }
+        constrainToSphere(obj);
       }
 
       function updateObjects(now: number, dt: number) {
@@ -1442,7 +1161,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             obj.local.z += obj.velocity.z * dt;
 
             if (obj.kind === "3d") obj.spin += obj.spinVelocity * dt;
-            solveObjectBounds(center, obj);
+            solveObjectBounds(obj);
           }
         }
       }
@@ -1645,7 +1364,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
       function requestStation(index: number) {
         arrivingAt = Math.max(0, Math.min(stations.length - 1, index));
-        targetZ = stationZ(arrivingAt) + 8.5;
+        targetZ = stationZ(arrivingAt) + presentationSettings.camera.distanceFromCenter;
         paperOpen = 0;
         paperTarget = 0;
         paperTextOverride = null;
@@ -1692,7 +1411,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       function update(now: number, dt: number) {
         if (presentationSettings.camera.mode === "locked") {
           targetYaw = 0;
-          targetPitch = -0.02;
+          targetPitch = 0;
         }
 
         const dz = targetZ - cameraZ;
@@ -1819,7 +1538,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           obj.velocity.x = Math.max(-maxToss, Math.min(maxToss, (dx / dt) * 0.0025));
           obj.velocity.y = Math.max(-maxToss, Math.min(maxToss, (-dy / dt) * 0.0025));
           draggedDistance += Math.hypot(dx, dy);
-          solveObjectBounds(stationCenter(grabbed.stationIndex), obj);
+          solveObjectBounds(obj);
 
           dragLastX = x;
           dragLastY = y;
@@ -1865,7 +1584,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       gameCanvas.addEventListener("pointerleave", () => {
         if (!grabbed && presentationSettings.camera.mode === "focus") {
           targetYaw = 0;
-          targetPitch = -0.02;
+          targetPitch = 0;
         }
       });
 
