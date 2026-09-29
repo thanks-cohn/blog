@@ -184,6 +184,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
     | "viewport.enabled"
     | "viewport.paddingPx"
     | "initialPlacement.keepViewerImageSightlineClear"
+    | "interaction.contextMenuMode"
     | "debug.glbGlobe.enabled"
     | "debug.glbGlobe.objectName"
     | "editor.mode"
@@ -223,6 +224,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
     initialPlacement: {
       keepViewerImageSightlineClear: boolean;
     };
+    interaction: {
+      contextMenuMode: "experience" | "edit";
+    };
     debug: {
       glbGlobe: {
         enabled: boolean;
@@ -250,7 +254,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
   type SettingDescriptor = {
     key: PresentationSettingKey;
     label: string;
-    group: "sphere" | "camera" | "viewport" | "initialPlacement" | "debug" | "editor" | "textPlane";
+    group: "sphere" | "camera" | "viewport" | "initialPlacement" | "interaction" | "debug" | "editor" | "textPlane";
     control: "number" | "select" | "toggle" | "color";
     description?: string;
     min?: number;
@@ -730,6 +734,14 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
                 ? config.arrangement.initialPlacement.keepViewerImageSightlineClear
                 : true
         },
+        interaction: {
+          contextMenuMode:
+            station?.interaction?.contextMenuMode === "edit"
+              ? "edit"
+              : config.arrangement?.interaction?.contextMenuMode === "edit"
+                ? "edit"
+                : "experience"
+        },
         debug: {
           glbGlobe: {
             enabled: Boolean(station?.debug?.glbGlobe?.enabled ?? config.arrangement?.debug?.glbGlobe?.enabled ?? false),
@@ -776,6 +788,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           keepViewerImageSightlineClear: Boolean(
             source.initialPlacement.keepViewerImageSightlineClear
           )
+        },
+        interaction: {
+          contextMenuMode: source.interaction.contextMenuMode === "edit" ? "edit" : "experience"
         },
         debug: {
           glbGlobe: {
@@ -858,6 +873,14 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
             typeof raw?.initialPlacement?.keepViewerImageSightlineClear === "boolean"
               ? raw.initialPlacement.keepViewerImageSightlineClear
               : defaults.initialPlacement.keepViewerImageSightlineClear
+        },
+        interaction: {
+          contextMenuMode:
+            raw?.interaction?.contextMenuMode === "edit"
+              ? "edit"
+              : raw?.interaction?.contextMenuMode === "experience"
+                ? "experience"
+                : defaults.interaction.contextMenuMode
         },
         debug: {
           glbGlobe: {
@@ -1039,6 +1062,17 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           description: "Spawn rule only: objects begin outside the viewer-to-image corridor, but may move through it afterward."
         },
         {
+          key: "interaction.contextMenuMode",
+          label: "Right-click menu",
+          group: "interaction",
+          control: "select",
+          description: "Visitor mode keeps the public interaction romantic and simple. Edit tools exposes the technical placement menu.",
+          options: [
+            { value: "experience", label: "Come Into Our World" },
+            { value: "edit", label: "Edit tools" }
+          ]
+        },
+        {
           key: "debug.glbGlobe.enabled",
           label: "Debug globe",
           group: "debug",
@@ -1152,6 +1186,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         if (key === "viewport.enabled") return presentationSettings.viewport.enabled;
         if (key === "viewport.paddingPx") return presentationSettings.viewport.paddingPx;
         if (key === "initialPlacement.keepViewerImageSightlineClear") return presentationSettings.initialPlacement.keepViewerImageSightlineClear;
+        if (key === "interaction.contextMenuMode") return presentationSettings.interaction.contextMenuMode;
         if (key === "debug.glbGlobe.enabled") return presentationSettings.debug.glbGlobe.enabled;
         if (key === "debug.glbGlobe.objectName") return presentationSettings.debug.glbGlobe.objectName;
         if (key === "editor.mode") return presentationSettings.editor.mode;
@@ -1201,6 +1236,8 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           presentationSettings.viewport.paddingPx = Math.max(0, Number(value) || 0);
         } else if (key === "initialPlacement.keepViewerImageSightlineClear") {
           presentationSettings.initialPlacement.keepViewerImageSightlineClear = Boolean(value);
+        } else if (key === "interaction.contextMenuMode") {
+          presentationSettings.interaction.contextMenuMode = value === "edit" ? "edit" : "experience";
         } else if (key === "debug.glbGlobe.enabled") {
           presentationSettings.debug.glbGlobe.enabled = Boolean(value);
         } else if (key === "debug.glbGlobe.objectName") {
@@ -1607,6 +1644,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
               descriptor.group === "camera" ? "Camera" :
               descriptor.group === "viewport" ? "Viewport" :
               descriptor.group === "initialPlacement" ? "Initial placement" :
+              descriptor.group === "interaction" ? "Interaction" :
               descriptor.group === "debug" ? "Debug" :
               descriptor.group === "editor" ? "Edit Layer" :
               "Text plane";
@@ -3128,7 +3166,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         const hint = arrived()
           ? presentationSettings.editor.mode === "hemisphere"
             ? `HEMISPHERE EDITOR · ${presentationSettings.editor.hemisphere.toUpperCase()} · right-click for cameras/reposition`
-            : `Explore the monument · drag or toss floating objects${mouseHint} · ← → ride`
+            : presentationSettings.interaction.contextMenuMode === "edit"
+              ? `Explore the monument · right-click for edit tools · drag/toss objects${mouseHint} · ← → ride`
+              : `Explore the monument · right-click a 3D object to Come Into Our World${mouseHint} · ← → ride`
           : "Riding the thread…";
 
         ctx.textAlign = "center";
@@ -3221,6 +3261,39 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         editContextMenu.appendChild(button);
       }
 
+      function requestFocusExperience(obj: SceneObject) {
+        // The public action is intentionally decoupled from the editor. Future
+        // camera/audio/text implementations can subscribe to this event without
+        // changing the right-click contract.
+        window.dispatchEvent(new CustomEvent("webrev:focus-experience-request", {
+          detail: {
+            stationId: activeStationId,
+            objectId: obj.id,
+            objectName: obj.name,
+            action: "come-into-our-world"
+          }
+        }));
+        status && (status.textContent = `Come Into Our World · ${obj.name}`);
+      }
+
+      function openExperienceContextMenu(clientX: number, clientY: number, obj: SceneObject | null) {
+        if (!editContextMenu) return;
+        editContextMenu.replaceChildren();
+
+        if (!obj || obj.kind !== "3d") {
+          const heading = document.createElement("div");
+          heading.className = "edit-context-heading";
+          heading.textContent = "Come Into Our World";
+          editContextMenu.appendChild(heading);
+        } else {
+          addEditContextAction("Come Into Our World", () => requestFocusExperience(obj));
+        }
+
+        editContextMenu.style.left = `${Math.max(8, Math.min(window.innerWidth - 270, clientX))}px`;
+        editContextMenu.style.top = `${Math.max(8, Math.min(window.innerHeight - 180, clientY))}px`;
+        editContextMenu.hidden = false;
+      }
+
       function openEditContextMenu(clientX: number, clientY: number, obj: SceneObject | null) {
         if (!editContextMenu) return;
         const api = window.webrevPresentationSettings;
@@ -3286,7 +3359,12 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         event.preventDefault();
         const rect = gameCanvas.getBoundingClientRect();
         const obj = findHitObject(event.clientX - rect.left, event.clientY - rect.top);
-        openEditContextMenu(event.clientX, event.clientY, obj);
+
+        if (presentationSettings.interaction.contextMenuMode === "edit") {
+          openEditContextMenu(event.clientX, event.clientY, obj);
+        } else {
+          openExperienceContextMenu(event.clientX, event.clientY, obj);
+        }
       });
 
       window.addEventListener("pointerdown", (event) => {
