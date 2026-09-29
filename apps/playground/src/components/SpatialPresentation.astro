@@ -2277,7 +2277,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (line) ctx.fillText(line, x, yy);
       }
 
-      function projectedSideImagePlane(center: Vec3, widthWorld = 5.4, heightWorld = 5.9) {
+      function projectedEditImagePlane(center: Vec3, widthWorld = 5.4, heightWorld = 5.9) {
         const hw = widthWorld * 0.5;
         const hh = heightWorld * 0.5;
         const corners = [
@@ -2290,8 +2290,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         return corners as [Projected, Projected, Projected, Projected];
       }
 
-      function drawSidePerspectiveImage(station: any, center: Vec3, alpha: number) {
-        const corners = projectedSideImagePlane(center);
+      function drawEditPerspectiveImage(station: any, center: Vec3, alpha: number) {
+        const corners = projectedEditImagePlane(center);
         if (!corners) return false;
         const [bottomLeft, bottomRight, topRight, topLeft] = corners;
         const colors = themeColors(station.theme);
@@ -2359,16 +2359,15 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const imageX = cp.x - imageW * .5;
         const imageY = cp.y - imageH * .5 - lift;
 
-        const sidePerspective =
+        const editPerspective =
           current &&
           presentationSettings.editor.mode === "hemisphere" &&
-          presentationSettings.editor.cameraPreset === "side" &&
-          drawSidePerspectiveImage(station, center, alpha);
+          drawEditPerspectiveImage(station, center, alpha);
 
         ctx.save();
         ctx.globalAlpha = alpha;
 
-        if (!sidePerspective) {
+        if (!editPerspective) {
           ctx.fillStyle = "#141414";
           ctx.fillRect(imageX - 10, imageY - 10, imageW + 20, imageH + 20);
 
@@ -2385,6 +2384,9 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           ctx.fillText(station.label, imageX + 16, imageY + imageH - 18);
         }
 
+        // In Hemisphere Edit Mode the image plane stays fixed in world space,
+        // so each camera preset reveals a genuinely different viewing angle.
+        // The paper remains the existing presentation overlay.
         // The paper is always present. Closed = perpendicular/edge-on to the image.
         const open = current ? paperOpen : 0;
         const paperW = 5.0 * scale;
