@@ -80,10 +80,18 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     lastScreen?: { x: number; y: number; radius: number; depth: number };
   };
 
-  type PresentationSettingKey = "camera.mouseMovesCamera";
+  type PresentationSettingKey =
+    | "camera.mouseMovesCamera"
+    | "assets.minDistanceFromCenter"
+    | "assets.maxDistanceFromCenter";
+  type PresentationSettingValue = boolean | number;
   type PresentationSettingsSnapshot = {
     camera: {
       mouseMovesCamera: boolean;
+    };
+    assets: {
+      minDistanceFromCenter: number;
+      maxDistanceFromCenter: number;
     };
   };
   type SettingsListener = (settings: PresentationSettingsSnapshot) => void;
@@ -92,8 +100,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     interface Window {
       webrevPresentationSettings?: {
         get(): PresentationSettingsSnapshot;
-        get(key: PresentationSettingKey): boolean;
-        set(key: PresentationSettingKey, value: boolean): PresentationSettingsSnapshot;
+        get(key: PresentationSettingKey): PresentationSettingValue;
+        set(key: PresentationSettingKey, value: PresentationSettingValue): PresentationSettingsSnapshot;
         reset(key?: PresentationSettingKey): PresentationSettingsSnapshot;
         subscribe(listener: SettingsListener): () => void;
       };
@@ -191,7 +199,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       threeScene.add(mesh);
       occluders.set(stationIndex, mesh);
     }
-    mesh.position.set(center.x, center.y - 0.08, center.z + 0.02);
+    mesh.position.set(center.x, center.y, center.z + 0.02);
     mesh.rotation.set(0, 0, 0);
     mesh.visible = true;
     return mesh;
@@ -202,15 +210,33 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     const gameCanvas: HTMLCanvasElement = canvas;
     const config = JSON.parse(root.dataset.config ?? "{}");
     const settingsStorageKey = "webrev:presentation-settings:v1";
+    const defaultMinDistance = Math.max(
+      0,
+      Number(config.arrangement?.assetRange?.minDistanceFromCenter ?? config.arrangement?.influenceSphere?.innerRadius ?? 4.2)
+    );
+    const defaultMaxDistance = Math.max(
+      defaultMinDistance,
+      Number(config.arrangement?.assetRange?.maxDistanceFromCenter ?? config.arrangement?.influenceSphere?.radius ?? 6.4)
+    );
     const settingDefaults: PresentationSettingsSnapshot = {
       camera: {
         mouseMovesCamera: Boolean(config.arrangement?.controls?.mouseMovesCamera ?? false)
+      },
+      assets: {
+        minDistanceFromCenter: defaultMinDistance,
+        maxDistanceFromCenter: defaultMaxDistance
       }
     };
     const settingsListeners = new Set<SettingsListener>();
 
     function cloneSettings(source: PresentationSettingsSnapshot): PresentationSettingsSnapshot {
-      return { camera: { mouseMovesCamera: Boolean(source.camera.mouseMovesCamera) } };
+      return {
+        camera: { mouseMovesCamera: Boolean(source.camera.mouseMovesCamera) },
+        assets: {
+          minDistanceFromCenter: Number(source.assets.minDistanceFromCenter),
+          maxDistanceFromCenter: Number(source.assets.maxDistanceFromCenter)
+        }
+      };
     }
 
     function loadSettings(): PresentationSettingsSnapshot {
@@ -218,12 +244,24 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const raw = window.localStorage.getItem(settingsStorageKey);
         if (!raw) return cloneSettings(settingDefaults);
         const parsed = JSON.parse(raw);
+        const loadedMin = Number(parsed?.assets?.minDistanceFromCenter);
+        const loadedMax = Number(parsed?.assets?.maxDistanceFromCenter);
+        const minDistance = Number.isFinite(loadedMin)
+          ? Math.max(0, loadedMin)
+          : settingDefaults.assets.minDistanceFromCenter;
+        const maxDistance = Number.isFinite(loadedMax)
+          ? Math.max(minDistance, loadedMax)
+          : Math.max(minDistance, settingDefaults.assets.maxDistanceFromCenter);
         return {
           camera: {
             mouseMovesCamera:
               typeof parsed?.camera?.mouseMovesCamera === "boolean"
                 ? parsed.camera.mouseMovesCamera
                 : settingDefaults.camera.mouseMovesCamera
+          },
+          assets: {
+            minDistanceFromCenter: minDistance,
+            maxDistanceFromCenter: maxDistance
           }
         };
       } catch {
@@ -246,17 +284,37 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     window.webrevPresentationSettings = {
       get(key?: PresentationSettingKey) {
         if (key === "camera.mouseMovesCamera") return presentationSettings.camera.mouseMovesCamera;
+        if (key === "assets.minDistanceFromCenter") return presentationSettings.assets.minDistanceFromCenter;
+        if (key === "assets.maxDistanceFromCenter") return presentationSettings.assets.maxDistanceFromCenter;
         return cloneSettings(presentationSettings);
       },
-      set(key: PresentationSettingKey, value: boolean) {
+      set(key: PresentationSettingKey, value: PresentationSettingValue) {
         if (key === "camera.mouseMovesCamera") {
           presentationSettings.camera.mouseMovesCamera = Boolean(value);
+        } else if (key === "assets.minDistanceFromCenter") {
+          const next = Math.max(0, Number(value) || 0);
+          presentationSettings.assets.minDistanceFromCenter = Math.min(
+            next,
+            presentationSettings.assets.maxDistanceFromCenter
+          );
+        } else if (key === "assets.maxDistanceFromCenter") {
+          const next = Math.max(0, Number(value) || 0);
+          presentationSettings.assets.maxDistanceFromCenter = Math.max(
+            next,
+            presentationSettings.assets.minDistanceFromCenter
+          );
         }
         return publishSettings();
       },
       reset(key?: PresentationSettingKey) {
         if (!key || key === "camera.mouseMovesCamera") {
           presentationSettings.camera.mouseMovesCamera = settingDefaults.camera.mouseMovesCamera;
+        }
+        if (!key || key === "assets.minDistanceFromCenter") {
+          presentationSettings.assets.minDistanceFromCenter = settingDefaults.assets.minDistanceFromCenter;
+        }
+        if (!key || key === "assets.maxDistanceFromCenter") {
+          presentationSettings.assets.maxDistanceFromCenter = settingDefaults.assets.maxDistanceFromCenter;
         }
         return publishSettings();
       },
@@ -285,7 +343,14 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       const spacing = Number(rail.stationSpacing) || 26;
       const rideSpeed = Number(rail.speed) || 7.5;
       const prismRadius = Number(rail.prismRadius) || 3.4;
-      const sphereRadius = Number(sphere.radius) || 6.4;
+
+      function minAssetDistance() {
+        return Math.max(0, Number(presentationSettings.assets.minDistanceFromCenter) || 0);
+      }
+
+      function maxAssetDistance() {
+        return Math.max(minAssetDistance(), Number(presentationSettings.assets.maxDistanceFromCenter) || 0.01);
+      }
 
       let width = 1;
       let height = 1;
@@ -351,8 +416,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       }
 
       function randomPlacement(rand: () => number): Vec3 {
-        const outer = sphereRadius;
-        const inner = Math.min(outer - 0.25, Number(sphere.innerRadius) || outer * 0.62);
+        const outer = maxAssetDistance();
+        const inner = Math.min(outer, minAssetDistance());
         let point: Vec3 = { x: outer, y: 0, z: 0 };
 
         for (let attempt = 0; attempt < 100; attempt++) {
@@ -390,9 +455,9 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (layer === "near") {
           position.x *= 0.5;
           position.y *= 0.5;
-          position.z = Math.abs(position.z) * 0.24 + sphereRadius * 0.30;
+          position.z = Math.abs(position.z) * 0.24 + maxAssetDistance() * 0.30;
         } else if (layer === "far") {
-          position.z = -Math.abs(position.z) * 0.45 - sphereRadius * 0.34;
+          position.z = -Math.abs(position.z) * 0.45 - maxAssetDistance() * 0.34;
         } else {
           position.z *= 0.3;
         }
@@ -584,15 +649,17 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       function constrainToSphere(obj: SceneObject) {
         const p = obj.local;
         const d = Math.hypot(p.x, p.y, p.z);
-        const max = sphereRadius - obj.size * 0.35;
-        if (d > max && d > 0.0001) {
+        const min = minAssetDistance();
+        const max = Math.max(min, maxAssetDistance() - obj.size * 0.35);
+        if (d > 0.0001 && (d > max || d < min)) {
+          const target = d > max ? max : min;
           const nx = p.x / d, ny = p.y / d, nz = p.z / d;
-          obj.local.x = nx * max;
-          obj.local.y = ny * max;
-          obj.local.z = nz * max;
+          obj.local.x = nx * target;
+          obj.local.y = ny * target;
+          obj.local.z = nz * target;
           const vn = obj.velocity.x * nx + obj.velocity.y * ny + obj.velocity.z * nz;
           const restitution = Number(motion.boundaryRestitution) || 0.5;
-          if (vn > 0) {
+          if ((d > max && vn > 0) || (d < min && vn < 0)) {
             obj.velocity.x -= (1 + restitution) * vn * nx;
             obj.velocity.y -= (1 + restitution) * vn * ny;
             obj.velocity.z -= (1 + restitution) * vn * nz;
@@ -755,7 +822,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const imageW = 5.4 * scale;
         const imageH = 5.9 * scale;
         const imageX = cp.x - imageW * .5;
-        const imageY = cp.y - imageH * .58 - lift;
+        const imageY = cp.y - imageH * .5 - lift;
 
         ctx.save();
         ctx.globalAlpha = alpha;
