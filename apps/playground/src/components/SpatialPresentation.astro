@@ -178,7 +178,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     | "textPlane.attachment"
     | "textPlane.orientationMode"
     | "textPlane.rotationAxis"
-    | "textPlane.angleDegrees";
+    | "textPlane.angleDegrees"
+    | "textPlane.placementSpace";
   type PresentationSettingValue = boolean | number | string;
   type AssetHemisphere = "front" | "back";
   type AssetPlacementState = Record<string, { hemisphere: AssetHemisphere; visible: boolean }>;
@@ -216,6 +217,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       orientationMode: "axis-angle";
       rotationAxis: "center-horizontal-line";
       angleDegrees: number;
+      placementSpace: "image-relative";
     };
   };
   type GlbRuntimeStatus = "acknowledged" | "loading" | "loaded" | "retrying" | "failed";
@@ -610,12 +612,13 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           color: String(station?.textPlane?.color ?? config.arrangement?.textPlane?.color ?? "#ffffff"),
           width: Math.max(0.2, Number(station?.textPlane?.width ?? config.arrangement?.textPlane?.width ?? 5.0)),
           height: Math.max(0.15, Number(station?.textPlane?.height ?? config.arrangement?.textPlane?.height ?? 0.75)),
-          offsetY: Number(station?.textPlane?.offsetY ?? config.arrangement?.textPlane?.offsetY ?? -0.18),
+          offsetY: Math.max(0, Number(station?.textPlane?.offsetY ?? config.arrangement?.textPlane?.offsetY ?? 0.18)),
           offsetZ: Number(station?.textPlane?.offsetZ ?? config.arrangement?.textPlane?.offsetZ ?? 0.72),
           attachment: "separate",
           orientationMode: "axis-angle",
           rotationAxis: "center-horizontal-line",
-          angleDegrees: Number(station?.textPlane?.angleDegrees ?? config.arrangement?.textPlane?.angleDegrees ?? 0)
+          angleDegrees: Number(station?.textPlane?.angleDegrees ?? config.arrangement?.textPlane?.angleDegrees ?? 0),
+          placementSpace: "image-relative"
         }
       };
     }
@@ -663,7 +666,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           attachment: "separate",
           orientationMode: "axis-angle",
           rotationAxis: "center-horizontal-line",
-          angleDegrees: Number(source.textPlane.angleDegrees)
+          angleDegrees: Number(source.textPlane.angleDegrees),
+          placementSpace: "image-relative"
         }
       };
     }
@@ -747,14 +751,23 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           color: typeof raw?.textPlane?.color === "string" ? raw.textPlane.color : defaults.textPlane.color,
           width: Number.isFinite(Number(raw?.textPlane?.width)) ? Math.max(0.2, Number(raw.textPlane.width)) : defaults.textPlane.width,
           height: Number.isFinite(Number(raw?.textPlane?.height)) ? Math.max(0.15, Number(raw.textPlane.height)) : defaults.textPlane.height,
-          offsetY: Number.isFinite(Number(raw?.textPlane?.offsetY)) ? Number(raw.textPlane.offsetY) : defaults.textPlane.offsetY,
-          offsetZ: Number.isFinite(Number(raw?.textPlane?.offsetZ)) ? Number(raw.textPlane.offsetZ) : defaults.textPlane.offsetZ,
+          offsetY:
+            raw?.textPlane?.placementSpace === "image-relative" &&
+            Number.isFinite(Number(raw?.textPlane?.offsetY))
+              ? Math.max(0, Number(raw.textPlane.offsetY))
+              : defaults.textPlane.offsetY,
+          offsetZ:
+            raw?.textPlane?.placementSpace === "image-relative" &&
+            Number.isFinite(Number(raw?.textPlane?.offsetZ))
+              ? Number(raw.textPlane.offsetZ)
+              : defaults.textPlane.offsetZ,
           attachment: "separate",
           orientationMode: "axis-angle",
           rotationAxis: "center-horizontal-line",
           angleDegrees: Number.isFinite(Number(raw?.textPlane?.angleDegrees))
             ? Number(raw.textPlane.angleDegrees)
-            : defaults.textPlane.angleDegrees
+            : defaults.textPlane.angleDegrees,
+          placementSpace: "image-relative"
         }
       };
       normalizeCameraForSphere(loaded);
@@ -929,7 +942,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         { key: "textPlane.color", label: "Text plane color", group: "textPlane", control: "color" },
         { key: "textPlane.width", label: "Text plane width", group: "textPlane", control: "number", min: 0.2, step: 0.1 },
         { key: "textPlane.height", label: "Text plane depth", group: "textPlane", control: "number", min: 0.15, step: 0.05 },
-        { key: "textPlane.offsetY", label: "Gap from image foot", group: "textPlane", control: "number", step: 0.05, description: "Local offset from the main image foot, not an independent world Y position." },
+        { key: "textPlane.offsetY", label: "Gap from image foot", group: "textPlane", control: "number", min: 0, step: 0.05, description: "Positive local gap below the image foot. The plaque remains separate." },
         { key: "textPlane.offsetZ", label: "Forward from image", group: "textPlane", control: "number", step: 0.05, description: "Moves along the main image's local normal so the plaque follows the image frame." },
         {
           key: "textPlane.attachment",
@@ -966,6 +979,15 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           min: -180,
           max: 180,
           step: 1
+        },
+        {
+          key: "textPlane.placementSpace",
+          label: "Placement space",
+          group: "textPlane",
+          control: "select",
+          readOnly: true,
+          description: "Position and orientation are derived from the visible main image frame.",
+          options: [{ value: "image-relative", label: "Main image relative" }]
         }
       ];
     }
@@ -997,6 +1019,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (key === "textPlane.orientationMode") return presentationSettings.textPlane.orientationMode;
         if (key === "textPlane.rotationAxis") return presentationSettings.textPlane.rotationAxis;
         if (key === "textPlane.angleDegrees") return presentationSettings.textPlane.angleDegrees;
+        if (key === "textPlane.placementSpace") return presentationSettings.textPlane.placementSpace;
         return cloneSettings(presentationSettings);
       },
       set(key: PresentationSettingKey, value: PresentationSettingValue) {
@@ -1057,7 +1080,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         } else if (key === "textPlane.height") {
           presentationSettings.textPlane.height = Math.max(0.15, Number(value) || 0.15);
         } else if (key === "textPlane.offsetY") {
-          presentationSettings.textPlane.offsetY = Number(value) || 0;
+          presentationSettings.textPlane.offsetY = Math.max(0, Number(value) || 0);
         } else if (key === "textPlane.offsetZ") {
           presentationSettings.textPlane.offsetZ = Number(value) || 0;
         } else if (key === "textPlane.angleDegrees") {
@@ -1101,6 +1124,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (key === "textPlane.orientationMode") presentationSettings.textPlane.orientationMode = "axis-angle";
         if (key === "textPlane.rotationAxis") presentationSettings.textPlane.rotationAxis = "center-horizontal-line";
         if (key === "textPlane.angleDegrees") presentationSettings.textPlane.angleDegrees = defaults.textPlane.angleDegrees;
+        if (key === "textPlane.placementSpace") presentationSettings.textPlane.placementSpace = "image-relative";
         normalizeCameraForSphere(presentationSettings);
         return publishSettings();
       },
@@ -2441,40 +2465,71 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
         entry.mesh.visible = true;
 
-        // Image-local frame. The plaque is not visually attached, but its transform
-        // is derived from the main image so it follows every editor camera angle.
-        const imageRight = { x: 1, y: 0, z: 0 };
-        const imageUp = { x: 0, y: 1, z: 0 };
-        const imageNormal = { x: 0, y: 0, z: 1 };
-        const imageHalfHeight = 5.9 * 0.5;
+        // Derive from the image as it is ACTUALLY presented.
+        // Hemisphere Editor uses the fixed world image plane.
+        // Visitor/runtime billboard mode uses the camera-facing image frame.
+        let imageRight: Vec3;
+        let imageUp: Vec3;
+        let imageNormal: Vec3;
 
+        if (presentationSettings.editor.mode === "hemisphere") {
+          imageRight = { x: 1, y: 0, z: 0 };
+          imageUp = { x: 0, y: 1, z: 0 };
+          imageNormal = { x: 0, y: 0, z: 1 };
+        } else {
+          const basis = screenBasis(center, cameraPosition());
+          imageRight = basis.right;
+          imageUp = basis.up;
+          // screenBasis.forward points camera -> image; the visible front normal points back toward camera.
+          imageNormal = {
+            x: -basis.forward.x,
+            y: -basis.forward.y,
+            z: -basis.forward.z
+          };
+        }
+
+        const imageHalfHeight = 5.9 * 0.5;
+        const footDistance = imageHalfHeight + settings.offsetY;
         const plaqueCenter = {
           x:
-            center.x +
-            imageUp.x * (-imageHalfHeight + settings.offsetY) +
+            center.x -
+            imageUp.x * footDistance +
             imageNormal.x * settings.offsetZ,
           y:
-            center.y +
-            imageUp.y * (-imageHalfHeight + settings.offsetY) +
+            center.y -
+            imageUp.y * footDistance +
             imageNormal.y * settings.offsetZ,
           z:
-            center.z +
-            imageUp.z * (-imageHalfHeight + settings.offsetY) +
+            center.z -
+            imageUp.z * footDistance +
             imageNormal.z * settings.offsetZ
         };
-
         entry.mesh.position.set(plaqueCenter.x, plaqueCenter.y, plaqueCenter.z);
 
-        // Default: perpendicular to the main image, facing straight up.
-        // Additional angle pivots around the shared centered horizontal/right axis.
-        entry.mesh.rotation.order = "XYZ";
-        entry.mesh.rotation.set(
-          -Math.PI / 2 + settings.angleDegrees * Math.PI / 180,
-          0,
-          0
-        );
+        // Rotate the image's own up/normal vectors around its horizontal/right axis.
+        // 0° API angle means a -90° fold from the image: plaque faces "up".
+        const theta = (-90 + settings.angleDegrees) * Math.PI / 180;
+        const ct = Math.cos(theta);
+        const st = Math.sin(theta);
+        const plaqueUp = {
+          x: imageUp.x * ct + imageNormal.x * st,
+          y: imageUp.y * ct + imageNormal.y * st,
+          z: imageUp.z * ct + imageNormal.z * st
+        };
+        const plaqueNormal = {
+          x: imageNormal.x * ct - imageUp.x * st,
+          y: imageNormal.y * ct - imageUp.y * st,
+          z: imageNormal.z * ct - imageUp.z * st
+        };
 
-        // Keep the axis relation explicit for future image orientations.
+        const T3: any = THREE;
+        const basisMatrix = new T3.Matrix4().makeBasis(
+          new T3.Vector3(imageRight.x, imageRight.y, imageRight.z),
+          new T3.Vector3(plaqueUp.x, plaqueUp.y, plaqueUp.z),
+          new T3.Vector3(plaqueNormal.x, plaqueNormal.y, plaqueNormal.z)
+        );
+        entry.mesh.quaternion.setFromRotationMatrix(basisMatrix);
+
         entry.mesh.userData.imageRelativeFrame = {
           right: imageRight,
           up: imageUp,
@@ -2686,7 +2741,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const hint = arrived()
           ? presentationSettings.editor.mode === "hemisphere"
             ? `HEMISPHERE EDITOR · ${presentationSettings.editor.hemisphere.toUpperCase()} · right-click for cameras/reposition`
-            : `Click the paper to present it · drag or toss floating objects${mouseHint} · ← → ride`
+            : `Explore the monument · drag or toss floating objects${mouseHint} · ← → ride`
           : "Riding the thread…";
 
         ctx.textAlign = "center";
