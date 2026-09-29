@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 4,
+  "websites": {
+    "webrev-live": {
+      "origin": "https://webrev.online",
+      "categories": ["live"]
+    },
+    "webrev-cdn": {
+      "origin": "https://cdn.webrev.online",
+      "categories": ["cdn"]
+    }
+  },
+  "defaults": {
+    "live": "webrev-live",
+    "cdn": "webrev-cdn"
+  },
+  "routes": {}
+}

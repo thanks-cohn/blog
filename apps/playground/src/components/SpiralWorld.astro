@@ -1,0 +1,528 @@
+<section class="world-shell" data-webrev-id="world.spiral-descent">
+  <div class="world-copy">
+    <div class="eyebrow">THE WORLD IN 3D</div>
+    <h2>Down the spiral.</h2>
+    <p>A lightweight endless spiral staircase. The ball keeps bouncing on its own; you only steer where it lands as it descends.</p>
+
+    <div class="controls">
+      <div><kbd>← →</kbd><span>steer across the steps</span></div>
+      <div><kbd>↑ ↓</kbd><span>nudge along the spiral</span></div>
+      <div><kbd>Mouse</kbd> / <kbd>Touch</kbd><span>grab and toss</span></div>
+      <div><kbd>R</kbd><span>reset</span></div>
+    </div>
+  </div>
+
+  <div class="viewport">
+    <canvas id="spiral-world-canvas" width="960" height="640"></canvas>
+    <div class="hud">
+      <span id="depth-label">depth 0</span>
+      <span>endless spiral</span>
+    </div>
+  </div>
+</section>
+
+<script>
+  const canvas = document.getElementById("spiral-world-canvas");
+  const depthLabel = document.getElementById("depth-label");
+
+  if (canvas instanceof HTMLCanvasElement) {
+    const gameCanvas: HTMLCanvasElement = canvas;
+    const context = gameCanvas.getContext("2d");
+
+    if (context) {
+      const ctx: CanvasRenderingContext2D = context;
+
+      type Vec3 = { x: number; y: number; z: number };
+      type Projected = { x: number; y: number; depth: number; scale: number };
+
+      const keys = new Set<string>();
+
+      const stepsPerTurn = 20;
+      const stepAngle = (Math.PI * 2) / stepsPerTurn;
+      const stepDrop = 0.32;
+      const innerRadius = 1.65;
+      const outerRadius = 5.1;
+      const wallRadius = 5.34;
+      const wallHeight = 2.6;
+      const ballRadius = 0.38;
+
+      const bouncePeriod = 0.72;
+      const bounceHeight = 1.08;
+      const baseDescent = 2.35;
+      const steerAcceleration = 2.7;
+      const radialDrag = 0.9;
+
+      let progress = 0;
+      let radialOffset = 0;
+      let radialVelocity = 0;
+      let progressVelocity = baseDescent;
+      let cameraProgress = 0;
+      let previous = performance.now();
+
+      let dragging = false;
+      let lastPointerX = 0;
+      let lastPointerY = 0;
+      let lastPointerTime = performance.now();
+      let throwRadial = 0;
+      let throwProgress = 0;
+
+      function clamp(value: number, min: number, max: number) {
+        return Math.max(min, Math.min(max, value));
+      }
+
+      function fract(value: number) {
+        return value - Math.floor(value);
+      }
+
+      function resizeForDpr() {
+        const rect = gameCanvas.getBoundingClientRect();
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const width = Math.max(1, Math.floor(rect.width * dpr));
+        const height = Math.max(1, Math.floor(rect.height * dpr));
+
+        if (gameCanvas.width !== width || gameCanvas.height !== height) {
+          gameCanvas.width = width;
+          gameCanvas.height = height;
+        }
+
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        return { width: rect.width, height: rect.height };
+      }
+
+      function reset() {
+        progress = 0;
+        radialOffset = 0;
+        radialVelocity = 0;
+        progressVelocity = baseDescent;
+        cameraProgress = 0;
+        dragging = false;
+      }
+
+      function ballPosition(nowSeconds: number): Vec3 {
+        const angle = progress * stepAngle;
+        const midRadius = (innerRadius + outerRadius) * 0.5;
+        const radius = clamp(
+          midRadius + radialOffset,
+          innerRadius + ballRadius + 0.16,
+          outerRadius - ballRadius - 0.16
+        );
+
+        const bouncePhase = fract(nowSeconds / bouncePeriod);
+        const bounce = Math.sin(bouncePhase * Math.PI) * bounceHeight;
+
+        return {
+          x: Math.cos(angle) * radius,
+          y: -progress * stepDrop + ballRadius + bounce,
+          z: Math.sin(angle) * radius
+        };
+      }
+
+      function project(point: Vec3, width: number, height: number): Projected | null {
+        const cameraY = -cameraProgress * stepDrop + 11.2;
+        const camera = { x: 0.9, y: cameraY, z: 2.2 };
+        const target = { x: 0, y: cameraY - 11.8, z: 0 };
+
+        const dx = point.x - camera.x;
+        const dy = point.y - camera.y;
+        const dz = point.z - camera.z;
+
+        const tx = target.x - camera.x;
+        const ty = target.y - camera.y;
+        const tz = target.z - camera.z;
+
+        const yaw = Math.atan2(tx, -tz);
+        const horizontal = Math.hypot(tx, tz);
+        const pitch = Math.atan2(ty, horizontal);
+
+        const cy = Math.cos(-yaw);
+        const sy = Math.sin(-yaw);
+        const x1 = dx * cy - dz * sy;
+        const z1 = dx * sy + dz * cy;
+
+        const cp = Math.cos(-pitch);
+        const sp = Math.sin(-pitch);
+        const y2 = dy * cp - z1 * sp;
+        const z2 = dy * sp + z1 * cp;
+
+        const depth = -z2;
+        if (depth <= 0.45) return null;
+
+        const focal = Math.min(width, height) * 0.94;
+        const scale = focal / depth;
+
+        return {
+          x: width * 0.5 + x1 * scale,
+          y: height * 0.43 - y2 * scale,
+          depth,
+          scale
+        };
+      }
+
+      function stepPoints(index: number): Vec3[] {
+        const a0 = index * stepAngle - stepAngle * 0.52;
+        const a1 = index * stepAngle + stepAngle * 0.52;
+        const y = -index * stepDrop;
+
+        return [
+          { x: Math.cos(a0) * innerRadius, y, z: Math.sin(a0) * innerRadius },
+          { x: Math.cos(a0) * outerRadius, y, z: Math.sin(a0) * outerRadius },
+          { x: Math.cos(a1) * outerRadius, y, z: Math.sin(a1) * outerRadius },
+          { x: Math.cos(a1) * innerRadius, y, z: Math.sin(a1) * innerRadius }
+        ];
+      }
+
+      function projectPolygon(points: Vec3[], width: number, height: number) {
+        return points
+          .map((point) => project(point, width, height))
+          .filter((value): value is Projected => value !== null);
+      }
+
+      function drawProjected(points: Projected[], fill: string, stroke: string) {
+        if (points.length < 3) return;
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+        ctx.closePath();
+        ctx.fillStyle = fill;
+        ctx.fill();
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      function wallPoints(index: number): Vec3[] {
+        const a0 = index * stepAngle - stepAngle * 0.52;
+        const a1 = index * stepAngle + stepAngle * 0.52;
+        const y = -index * stepDrop;
+
+        return [
+          { x: Math.cos(a0) * wallRadius, y: y - stepDrop, z: Math.sin(a0) * wallRadius },
+          { x: Math.cos(a0) * wallRadius, y: y + wallHeight, z: Math.sin(a0) * wallRadius },
+          { x: Math.cos(a1) * wallRadius, y: y + wallHeight, z: Math.sin(a1) * wallRadius },
+          { x: Math.cos(a1) * wallRadius, y: y - stepDrop, z: Math.sin(a1) * wallRadius }
+        ];
+      }
+
+      function drawTorch(index: number, width: number, height: number) {
+        if (index % 5 !== 0) return;
+
+        const angle = index * stepAngle;
+        const p = project(
+          {
+            x: Math.cos(angle) * (wallRadius - 0.03),
+            y: -index * stepDrop + 1.05,
+            z: Math.sin(angle) * (wallRadius - 0.03)
+          },
+          width,
+          height
+        );
+
+        if (!p) return;
+
+        const r = clamp(p.scale * 0.075, 3, 12);
+        const halo = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 8);
+        halo.addColorStop(0, "rgba(255,229,170,.58)");
+        halo.addColorStop(0.28, "rgba(255,139,58,.22)");
+        halo.addColorStop(1, "rgba(255,110,30,0)");
+
+        ctx.fillStyle = halo;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r * 8, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#ffd594";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      function pointerPosition(event: PointerEvent) {
+        const rect = gameCanvas.getBoundingClientRect();
+        return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      }
+
+      gameCanvas.addEventListener("pointerdown", (event) => {
+        const rect = gameCanvas.getBoundingClientRect();
+        const pBall = project(ballPosition(performance.now() / 1000), rect.width, rect.height);
+        if (!pBall) return;
+
+        const p = pointerPosition(event);
+        const r = Math.max(18, pBall.scale * ballRadius);
+
+        if (Math.hypot(p.x - pBall.x, p.y - pBall.y) <= r * 1.4) {
+          dragging = true;
+          gameCanvas.setPointerCapture(event.pointerId);
+          lastPointerX = p.x;
+          lastPointerY = p.y;
+          lastPointerTime = performance.now();
+          throwRadial = 0;
+          throwProgress = 0;
+        }
+      });
+
+      gameCanvas.addEventListener("pointermove", (event) => {
+        if (!dragging) return;
+
+        const p = pointerPosition(event);
+        const now = performance.now();
+        const dt = Math.max((now - lastPointerTime) / 1000, 0.001);
+        const dx = p.x - lastPointerX;
+        const dy = p.y - lastPointerY;
+
+        radialOffset += dx * 0.012;
+        progress += dy * 0.018;
+
+        throwRadial = clamp((dx / dt) * 0.0045, -5, 5);
+        throwProgress = clamp((dy / dt) * 0.006, -7, 7);
+
+        lastPointerX = p.x;
+        lastPointerY = p.y;
+        lastPointerTime = now;
+      });
+
+      function releasePointer(event: PointerEvent) {
+        if (!dragging) return;
+        dragging = false;
+        radialVelocity = throwRadial;
+        progressVelocity = clamp(baseDescent + throwProgress, 0.6, 8);
+
+        if (gameCanvas.hasPointerCapture(event.pointerId)) {
+          gameCanvas.releasePointerCapture(event.pointerId);
+        }
+      }
+
+      gameCanvas.addEventListener("pointerup", releasePointer);
+      gameCanvas.addEventListener("pointercancel", releasePointer);
+
+      window.addEventListener("keydown", (event) => {
+        const key = event.key.toLowerCase();
+
+        if (["arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key)) {
+          event.preventDefault();
+          keys.add(key);
+        }
+
+        if (key === "r") reset();
+      });
+
+      window.addEventListener("keyup", (event) => {
+        keys.delete(event.key.toLowerCase());
+      });
+
+      function update(dt: number) {
+        if (!dragging) {
+          if (keys.has("arrowleft")) radialVelocity -= steerAcceleration * dt;
+          if (keys.has("arrowright")) radialVelocity += steerAcceleration * dt;
+
+          let targetProgressVelocity = baseDescent;
+          if (keys.has("arrowup")) targetProgressVelocity += 1.7;
+          if (keys.has("arrowdown")) targetProgressVelocity -= 1.35;
+
+          progressVelocity += (targetProgressVelocity - progressVelocity) * Math.min(1, dt * 4.5);
+
+          radialOffset += radialVelocity * dt;
+          radialVelocity *= Math.pow(radialDrag, dt * 60);
+          radialOffset = clamp(
+            radialOffset,
+            -(outerRadius - innerRadius) * 0.39,
+            (outerRadius - innerRadius) * 0.39
+          );
+
+          progress += Math.max(0.35, progressVelocity) * dt;
+        }
+
+        cameraProgress += (progress - cameraProgress) * Math.min(1, dt * 2.2);
+      }
+
+      function drawBall(nowSeconds: number, width: number, height: number) {
+        const p = project(ballPosition(nowSeconds), width, height);
+        if (!p) return;
+
+        const phase = fract(nowSeconds / bouncePeriod);
+        const impact = Math.max(0, 1 - Math.min(phase, 1 - phase) * 10);
+        const radius = clamp(ballRadius * p.scale, 9, 62);
+        const sx = 1 + impact * 0.25;
+        const sy = 1 - impact * 0.22;
+
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.scale(sx, sy);
+
+        const glow = ctx.createRadialGradient(-radius * 0.28, -radius * 0.32, radius * 0.12, 0, 0, radius);
+        glow.addColorStop(0, "#ffffff");
+        glow.addColorStop(0.18, "#e6f0ff");
+        glow.addColorStop(0.5, "#77a9ff");
+        glow.addColorStop(1, "#18294d");
+
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = dragging ? "rgba(255,255,255,.85)" : "rgba(255,255,255,.24)";
+        ctx.lineWidth = dragging ? 2 : 1;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      function draw(now: number) {
+        const dt = Math.min((now - previous) / 1000, 1 / 30);
+        previous = now;
+        update(dt);
+
+        const { width, height } = resizeForDpr();
+        const nowSeconds = now / 1000;
+
+        const bg = ctx.createRadialGradient(
+          width * 0.5,
+          height * 0.45,
+          12,
+          width * 0.5,
+          height * 0.48,
+          Math.max(width, height) * 0.75
+        );
+        bg.addColorStop(0, "#171514");
+        bg.addColorStop(0.5, "#090807");
+        bg.addColorStop(1, "#020202");
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, width, height);
+
+        const centerIndex = Math.floor(cameraProgress);
+        const items: Array<{
+          depth: number;
+          type: "step" | "wall";
+          points: Projected[];
+          index: number;
+        }> = [];
+
+        for (let i = centerIndex - 12; i <= centerIndex + 70; i++) {
+          if (i < 0) continue;
+
+          const stepProjected = projectPolygon(stepPoints(i), width, height);
+          if (stepProjected.length === 4) {
+            items.push({
+              depth: stepProjected.reduce((sum, p) => sum + p.depth, 0) / 4,
+              type: "step",
+              points: stepProjected,
+              index: i
+            });
+          }
+
+          const wallProjected = projectPolygon(wallPoints(i), width, height);
+          if (wallProjected.length === 4) {
+            items.push({
+              depth: wallProjected.reduce((sum, p) => sum + p.depth, 0) / 4,
+              type: "wall",
+              points: wallProjected,
+              index: i
+            });
+          }
+        }
+
+        items.sort((a, b) => b.depth - a.depth);
+
+        for (const item of items) {
+          const fade = clamp(1 - item.depth / 34, 0.1, 0.95);
+
+          if (item.type === "wall") {
+            drawProjected(
+              item.points,
+              `rgba(38,31,27,${fade})`,
+              `rgba(185,145,105,${fade * 0.1})`
+            );
+          } else {
+            const shade = item.index % 2 === 0 ? 73 : 62;
+            drawProjected(
+              item.points,
+              `rgba(${shade},${shade - 6},${shade - 9},${fade})`,
+              `rgba(215,195,175,${fade * 0.16})`
+            );
+          }
+        }
+
+        for (let i = centerIndex - 8; i <= centerIndex + 60; i++) {
+          if (i >= 0) drawTorch(i, width, height);
+        }
+
+        // Dark central shaft.
+        const shaftCenter = project(
+          { x: 0, y: -cameraProgress * stepDrop - 4, z: 0 },
+          width,
+          height
+        );
+        if (shaftCenter) {
+          const shaftRadius = clamp(innerRadius * shaftCenter.scale * 0.72, 28, 150);
+          const voidGradient = ctx.createRadialGradient(
+            shaftCenter.x,
+            shaftCenter.y,
+            0,
+            shaftCenter.x,
+            shaftCenter.y,
+            shaftRadius
+          );
+          voidGradient.addColorStop(0, "rgba(0,0,0,.98)");
+          voidGradient.addColorStop(0.62, "rgba(0,0,0,.86)");
+          voidGradient.addColorStop(1, "rgba(0,0,0,0)");
+          ctx.fillStyle = voidGradient;
+          ctx.beginPath();
+          ctx.arc(shaftCenter.x, shaftCenter.y, shaftRadius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        drawBall(nowSeconds, width, height);
+
+        const vignette = ctx.createRadialGradient(
+          width / 2,
+          height / 2,
+          Math.min(width, height) * 0.22,
+          width / 2,
+          height / 2,
+          Math.max(width, height) * 0.74
+        );
+        vignette.addColorStop(0, "rgba(0,0,0,0)");
+        vignette.addColorStop(1, "rgba(0,0,0,.66)");
+        ctx.fillStyle = vignette;
+        ctx.fillRect(0, 0, width, height);
+
+        if (depthLabel) {
+          depthLabel.textContent = `depth ${Math.round(progress * stepDrop * 10) / 10}`;
+        }
+
+        requestAnimationFrame(draw);
+      }
+
+      reset();
+      requestAnimationFrame(draw);
+    }
+  }
+</script>
+
+<style>
+  .world-shell {
+    display:grid;
+    grid-template-columns:minmax(220px,.62fr) minmax(0,1.8fr);
+    gap:28px;
+    align-items:stretch;
+  }
+  .world-copy,.viewport {
+    border:1px solid rgba(255,255,255,.1);
+    border-radius:28px;
+    background:rgba(255,255,255,.035);
+    backdrop-filter:blur(16px);
+  }
+  .world-copy { padding:26px; }
+  .eyebrow { font-size:.72rem; letter-spacing:.2em; opacity:.58; }
+  h2 { font-size:clamp(2rem,4vw,3.6rem); margin:.35em 0 .25em; letter-spacing:-.045em; }
+  p { color:#b8bdc7; line-height:1.65; }
+  .controls { display:grid; gap:10px; margin-top:24px; }
+  .controls div { display:grid; grid-template-columns:minmax(110px,auto) 1fr; gap:10px; align-items:center; color:#aeb6c5; font-size:.82rem; }
+  kbd { border:1px solid rgba(255,255,255,.15); border-bottom-color:rgba(255,255,255,.3); background:rgba(255,255,255,.06); border-radius:7px; padding:3px 6px; font:inherit; color:#f5f7fb; }
+  .viewport { position:relative; min-height:580px; overflow:hidden; touch-action:none; cursor:grab; }
+  .viewport:active { cursor:grabbing; }
+  canvas { display:block; width:100%; height:100%; min-height:580px; }
+  .hud { position:absolute; left:18px; right:18px; bottom:16px; display:flex; justify-content:space-between; gap:12px; color:#aeb6c5; font-size:.76rem; pointer-events:none; }
+  @media (max-width:800px) {
+    .world-shell { grid-template-columns:1fr; }
+    .viewport,canvas { min-height:480px; }
+  }
+</style>

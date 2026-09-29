@@ -1,0 +1,83 @@
+---
+import { resolveLink } from "@webrev/core";
+import linksConfig from "../../../../../config/links.json";
+import SpiralWorld from "../../components/SpiralWorld.astro";
+
+const homeHref = resolveLink(linksConfig, "home", import.meta.env.BASE_URL);
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>The World in 3D · WebRev</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+        background:#050506;
+        color:#f8f8f6;
+      }
+      body {
+        margin:0;
+        min-height:100vh;
+        background:
+          radial-gradient(circle at 50% 0%, rgba(95,75,58,.12), transparent 34%),
+          #050506;
+      }
+      main {
+        width:min(1220px,calc(100% - 32px));
+        margin:auto;
+        padding:30px 0 90px;
+      }
+      nav {
+        display:flex;
+        justify-content:space-between;
+        align-items:center;
+        margin-bottom:34px;
+      }
+      nav a {
+        color:#fff;
+        text-decoration:none;
+        opacity:.82;
+      }
+      .intro { margin-bottom:34px; }
+      .eyebrow {
+        letter-spacing:.2em;
+        text-transform:uppercase;
+        opacity:.58;
+        font-size:.72rem;
+      }
+      h1 {
+        font-size:clamp(3.2rem,8vw,7.4rem);
+        line-height:.9;
+        letter-spacing:-.06em;
+        margin:.18em 0;
+        max-width:980px;
+      }
+      .lede {
+        max-width:780px;
+        color:#b8bdc7;
+        line-height:1.7;
+        font-size:1.05rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav>
+        <a href={homeHref}>← WebRev</a>
+        <span>The World in 3D</span>
+      </nav>
+
+      <section class="intro">
+        <div class="eyebrow">A PLAYABLE WEBREV WORLD</div>
+        <h1>Go deeper.</h1>
+        <p class="lede">
+          Guide a restless bouncing ball down a dangerous dungeon staircase. The stone is simple for now, the lights are only placeholders, and the descent keeps going.
+        </p>
+      </section>
+
+      <SpiralWorld />
+    </main>
+  </body>
+</html>

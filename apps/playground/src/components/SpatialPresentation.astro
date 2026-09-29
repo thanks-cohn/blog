@@ -1,0 +1,805 @@
+---
+export interface Props {
+  config: any;
+  homeHref: string;
+  links: Record<string, string>;
+}
+
+const { config, homeHref, links } = Astro.props;
+
+type DiscoveredAsset = { name: string; url: string; kind: "2d" | "3d" };
+
+const discovered2d = import.meta.glob("../assets/2d-assets/*.{png,jpg,jpeg,webp,avif,svg}", {
+  eager: true,
+  query: "?url",
+  import: "default"
+}) as Record<string, string>;
+
+const discovered3d = import.meta.glob("../assets/3d-assets/*.{glb,gltf}", {
+  eager: true,
+  query: "?url",
+  import: "default"
+}) as Record<string, string>;
+
+const assetsByArtwork: Record<string, DiscoveredAsset[]> = {};
+
+function registerAsset(path: string, url: string, kind: "2d" | "3d") {
+  const file = path.split("/").pop() ?? "";
+  const base = file.replace(/\.[^.]+$/, "");
+  const match = base.match(/^(.*?)-(\d+)$/);
+  if (!match) return;
+  const artworkName = match[1];
+  (assetsByArtwork[artworkName] ??= []).push({ name: file, url, kind });
+}
+
+for (const [path, url] of Object.entries(discovered2d)) registerAsset(path, url, "2d");
+for (const [path, url] of Object.entries(discovered3d)) registerAsset(path, url, "3d");
+
+const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
+---
+
+<div
+  class="presentation"
+  data-webrev-id="presentation.uniqueness-rewarded"
+  data-config={JSON.stringify(runtimeConfig)}
+  data-home-href={homeHref}
+>
+  <canvas id="prism-rail-canvas" aria-label="Design it Your Way spatial presentation"></canvas>
+  <div class="sr-only" aria-live="polite" id="presentation-status"></div>
+</div>
+
+<script>
+  type Vec3 = { x: number; y: number; z: number };
+  type Projected = { x: number; y: number; depth: number; scale: number };
+  type AssetAction =
+    | { type: "station"; stationId: string }
+    | { type: "link"; linkKey: string }
+    | { type: "url"; url: string }
+    | { type: "text"; title?: string; body?: string };
+
+  type SceneObject = {
+    id: string;
+    name: string;
+    kind: "2d" | "3d";
+    url?: string;
+    local: Vec3;
+    velocity: Vec3;
+    size: number;
+    shape: number;
+    spin: number;
+    spinVelocity: number;
+    phase: number;
+    image?: HTMLImageElement;
+    action?: AssetAction;
+    lastScreen?: { x: number; y: number; radius: number; depth: number };
+  };
+
+  const root = document.querySelector<HTMLElement>(".presentation[data-config]");
+  const canvas = document.getElementById("prism-rail-canvas");
+
+  if (root && canvas instanceof HTMLCanvasElement) {
+    const gameCanvas: HTMLCanvasElement = canvas;
+    const config = JSON.parse(root.dataset.config ?? "{}");
+    const stations = Array.isArray(config.stations) ? config.stations : [];
+    const assetsByArtwork = config.assetsByArtwork ?? {};
+    const assetActions = config.assetActions ?? {};
+    const resolvedLinks = config.resolvedLinks ?? {};
+    const ctxMaybe = gameCanvas.getContext("2d");
+
+    if (ctxMaybe && stations.length) {
+      const ctx: CanvasRenderingContext2D = ctxMaybe;
+      const status = document.getElementById("presentation-status");
+      const rail = config.rail;
+      const arrangement = config.arrangement;
+      const billboard = arrangement.billboard2d ?? {};
+      const motion = arrangement.motion ?? {};
+      const sphere = arrangement.influenceSphere;
+      const exclusion = arrangement.viewportExclusion;
+      const spacing = Number(rail.stationSpacing) || 26;
+      const rideSpeed = Number(rail.speed) || 7.5;
+      const prismRadius = Number(rail.prismRadius) || 3.4;
+      const sphereRadius = Number(sphere.radius) || 6.4;
+
+      let width = 1;
+      let height = 1;
+      let cameraZ = 9;
+      let targetZ = stationZ(0) + 8.5;
+      let arrivingAt = 0;
+      let lookYaw = 0;
+      let lookPitch = -0.02;
+      let targetYaw = 0;
+      let targetPitch = -0.02;
+      let pointerX = 0;
+      let pointerY = 0;
+      let previous = performance.now();
+
+      let paperOpen = 0;
+      let paperTarget = 0;
+      let paperTextOverride: { title?: string; body?: string } | null = null;
+      let lastPaperRect: { x: number; y: number; w: number; h: number } | null = null;
+      let grabbed: { stationIndex: number; object: SceneObject } | null = null;
+      let dragLastX = 0;
+      let dragLastY = 0;
+      let dragLastTime = performance.now();
+      let draggedDistance = 0;
+
+      const layouts = stations.map((station: any, index: number) => generateLayout(station, index));
+
+      function stationZ(index: number) {
+        return -18 - index * spacing;
+      }
+
+      function hashSeed(text: string, seed: number) {
+        let h = seed | 0;
+        for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+        return h >>> 0;
+      }
+
+      function rngFor(station: any, index: number) {
+        const randomVisit = arrangement.mode === "random-every-visit";
+        let state = randomVisit
+          ? ((Math.random() * 0xffffffff) >>> 0)
+          : hashSeed(station.artworkName ?? station.id ?? String(index), Number(arrangement.seed) || 1);
+
+        return () => {
+          state += 0x6D2B79F5;
+          let t = state;
+          t = Math.imul(t ^ (t >>> 15), t | 1);
+          t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+
+      function insideProtectedViewport(p: Vec3) {
+        const pad = Number(exclusion.padding) || 0;
+        return (
+          Math.abs(p.x) < Number(exclusion.width) * 0.5 + pad &&
+          Math.abs(p.y) < Number(exclusion.height) * 0.5 + pad &&
+          Math.abs(p.z) < Number(exclusion.depth) * 0.5 + pad
+        );
+      }
+
+      function randomPlacement(rand: () => number): Vec3 {
+        const outer = sphereRadius;
+        const inner = Math.min(outer - 0.25, Number(sphere.innerRadius) || outer * 0.62);
+        let point: Vec3 = { x: outer, y: 0, z: 0 };
+
+        for (let attempt = 0; attempt < 100; attempt++) {
+          const radius = inner + (outer - inner) * Math.cbrt(rand());
+          const theta = rand() * Math.PI * 2;
+          const cosPhi = rand() * 2 - 1;
+          const sinPhi = Math.sqrt(Math.max(0, 1 - cosPhi * cosPhi));
+          point = {
+            x: Math.cos(theta) * sinPhi * radius,
+            y: cosPhi * radius,
+            z: Math.sin(theta) * sinPhi * radius
+          };
+          if (!insideProtectedViewport(point)) return point;
+        }
+
+        return { x: outer, y: 0, z: 0 };
+      }
+
+      function generateLayout(station: any, index: number): SceneObject[] {
+        const rand = rngFor(station, index);
+        const discovered = Array.isArray(assetsByArtwork[station.artworkName])
+          ? assetsByArtwork[station.artworkName]
+          : [];
+        const count = discovered.length || Number(sphere.defaultObjectCount) || 10;
+        const result: SceneObject[] = [];
+
+        for (let i = 0; i < count; i++) {
+          const asset = discovered[i];
+          const kind: "2d" | "3d" = asset?.kind === "2d" ? "2d" : "3d";
+          const obj: SceneObject = {
+            id: `${station.id}-asset-${i}`,
+            name: asset?.name ?? `${station.artworkName}-proxy-${i + 1}`,
+            kind,
+            url: asset?.url,
+            local: randomPlacement(rand),
+            velocity: { x: 0, y: 0, z: 0 },
+            size: 0.42 + rand() * 0.7,
+            shape: Math.floor(rand() * 4),
+            spin: rand() * Math.PI * 2,
+            spinVelocity: (rand() - 0.5) * 0.28,
+            phase: rand() * Math.PI * 2,
+            action: asset ? assetActions[asset.name] : undefined
+          };
+
+          if (kind === "2d" && asset?.url) {
+            const image = new Image();
+            image.src = asset.url;
+            obj.image = image;
+          }
+
+          result.push(obj);
+        }
+
+        return result;
+      }
+
+      function twistAt(z: number) {
+        return Math.sin(z * 0.035) * 0.58 + Math.sin(z * 0.013) * 0.22;
+      }
+
+      function topFacePoint(z: number): Vec3 {
+        const twist = twistAt(z);
+        return {
+          x: Math.sin(twist) * prismRadius,
+          y: Math.cos(twist) * prismRadius,
+          z
+        };
+      }
+
+      function stationCenter(index: number): Vec3 {
+        const z = stationZ(index);
+        const railPoint = topFacePoint(z);
+        return { x: railPoint.x, y: railPoint.y + 0.9, z };
+      }
+
+      function resize() {
+        const rect = gameCanvas.getBoundingClientRect();
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        width = Math.max(1, rect.width);
+        height = Math.max(1, rect.height);
+        const pixelW = Math.floor(width * dpr);
+        const pixelH = Math.floor(height * dpr);
+
+        if (gameCanvas.width !== pixelW || gameCanvas.height !== pixelH) {
+          gameCanvas.width = pixelW;
+          gameCanvas.height = pixelH;
+        }
+
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+
+      function cameraPosition(): Vec3 {
+        const p = topFacePoint(cameraZ);
+        return { x: p.x, y: p.y + 0.35, z: cameraZ };
+      }
+
+      function project(point: Vec3): Projected | null {
+        const camera = cameraPosition();
+        const dx = point.x - camera.x;
+        const dy = point.y - camera.y;
+        const dz = point.z - camera.z;
+
+        const cy = Math.cos(-lookYaw);
+        const sy = Math.sin(-lookYaw);
+        const x1 = dx * cy - dz * sy;
+        const z1 = dx * sy + dz * cy;
+
+        const cp = Math.cos(-lookPitch);
+        const sp = Math.sin(-lookPitch);
+        const y2 = dy * cp - z1 * sp;
+        const z2 = dy * sp + z1 * cp;
+
+        const depth = -z2;
+        if (depth < 0.35) return null;
+
+        const focal = Math.min(width, height) * 0.92;
+        const scale = focal / depth;
+        return {
+          x: width * 0.5 + x1 * scale,
+          y: height * 0.5 - y2 * scale,
+          depth,
+          scale
+        };
+      }
+
+      function drawBackground() {
+        const g = ctx.createRadialGradient(
+          width * 0.5, height * 0.42, 10,
+          width * 0.5, height * 0.5, Math.max(width, height) * 0.78
+        );
+        g.addColorStop(0, "#18202b");
+        g.addColorStop(0.45, "#090d13");
+        g.addColorStop(1, "#020304");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, width, height);
+
+        ctx.fillStyle = "rgba(255,255,255,.14)";
+        for (let i = 0; i < 42; i++) {
+          const x = (i * 193.1) % width;
+          const y = (i * 91.7) % height;
+          ctx.fillRect(x, y, i % 4 === 0 ? 1.5 : 1, i % 4 === 0 ? 1.5 : 1);
+        }
+      }
+
+      function drawRail() {
+        const start = Math.floor(cameraZ / 4) * 4 + 8;
+        const points: Projected[] = [];
+
+        for (let z = start; z >= cameraZ - spacing * (stations.length + 2); z -= 1.2) {
+          const p = project(topFacePoint(z));
+          if (p) points.push(p);
+        }
+
+        if (points.length > 1) {
+          ctx.beginPath();
+          ctx.moveTo(points[0].x, points[0].y);
+          for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+          ctx.strokeStyle = "rgba(232,218,192,.68)";
+          ctx.lineWidth = 1.25;
+          ctx.stroke();
+        }
+      }
+
+      function themeColors(theme: string) {
+        if (theme === "blue") return ["#203954", "#7ea6d7", "#0d1520"];
+        if (theme === "rose") return ["#512937", "#c77f94", "#180d13"];
+        return ["#5a3a22", "#d5a268", "#1b120c"];
+      }
+
+      function constrainToSphere(obj: SceneObject) {
+        const p = obj.local;
+        const d = Math.hypot(p.x, p.y, p.z);
+        const max = sphereRadius - obj.size * 0.35;
+        if (d > max && d > 0.0001) {
+          const nx = p.x / d, ny = p.y / d, nz = p.z / d;
+          obj.local.x = nx * max;
+          obj.local.y = ny * max;
+          obj.local.z = nz * max;
+          const vn = obj.velocity.x * nx + obj.velocity.y * ny + obj.velocity.z * nz;
+          const restitution = Number(motion.boundaryRestitution) || 0.5;
+          if (vn > 0) {
+            obj.velocity.x -= (1 + restitution) * vn * nx;
+            obj.velocity.y -= (1 + restitution) * vn * ny;
+            obj.velocity.z -= (1 + restitution) * vn * nz;
+          }
+        }
+      }
+
+      function updateObjects(now: number, dt: number) {
+        const damping = Math.pow(Number(motion.tossDamping) || 0.992, dt * 60);
+        const floatStrength = Number(motion.floatStrength) || 0.08;
+        const floatSpeed = Number(motion.floatSpeed) || 0.22;
+
+        for (const layout of layouts) {
+          for (const obj of layout) {
+            if (grabbed?.object === obj) continue;
+            obj.velocity.x *= damping;
+            obj.velocity.y *= damping;
+            obj.velocity.z *= damping;
+
+            const t = now * 0.001 * floatSpeed + obj.phase;
+            obj.velocity.y += Math.sin(t) * floatStrength * dt;
+            obj.velocity.x += Math.cos(t * 0.77) * floatStrength * 0.42 * dt;
+
+            obj.local.x += obj.velocity.x * dt;
+            obj.local.y += obj.velocity.y * dt;
+            obj.local.z += obj.velocity.z * dt;
+
+            if (obj.kind === "3d") obj.spin += obj.spinVelocity * dt;
+            constrainToSphere(obj);
+          }
+        }
+      }
+
+      function drawSceneObject(center: Vec3, obj: SceneObject, alpha: number, now: number) {
+        const world = {
+          x: center.x + obj.local.x,
+          y: center.y + obj.local.y,
+          z: center.z + obj.local.z
+        };
+        const p = project(world);
+        if (!p || p.depth > 60) {
+          obj.lastScreen = undefined;
+          return;
+        }
+
+        const size = Math.max(8, obj.size * p.scale);
+        obj.lastScreen = { x: p.x, y: p.y, radius: size * 1.15, depth: p.depth };
+
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.globalAlpha = alpha;
+
+        if (obj.kind === "2d") {
+          const wobbleDeg = Number(billboard.wobbleDegrees) || 1.4;
+          const wobbleSpeed = Number(billboard.wobbleSpeed) || 0.28;
+          const maxYaw = Number(billboard.maxYawDegrees) || 5;
+          const wobble = Math.sin(now * 0.001 * wobbleSpeed + obj.phase) * wobbleDeg;
+          const tossTilt = Math.max(-maxYaw, Math.min(maxYaw, obj.velocity.x * 1.4));
+          const rotation = (wobble + tossTilt) * Math.PI / 180;
+          ctx.rotate(rotation);
+
+          if (obj.image?.complete && obj.image.naturalWidth > 0) {
+            const aspect = obj.image.naturalWidth / obj.image.naturalHeight;
+            const h = size * 1.7;
+            const w = h * aspect;
+            ctx.drawImage(obj.image, -w / 2, -h / 2, w, h);
+            ctx.strokeStyle = "rgba(255,255,255,.25)";
+            ctx.strokeRect(-w / 2, -h / 2, w, h);
+          } else {
+            ctx.fillStyle = "rgba(225,232,244,.88)";
+            ctx.fillRect(-size, -size * .72, size * 2, size * 1.44);
+            ctx.strokeStyle = "rgba(255,255,255,.28)";
+            ctx.strokeRect(-size, -size * .72, size * 2, size * 1.44);
+          }
+        } else {
+          ctx.rotate(obj.spin);
+          if (obj.shape === 0) {
+            const g = ctx.createRadialGradient(-size * .2, -size * .25, 0, 0, 0, size);
+            g.addColorStop(0, "#d9e4f2");
+            g.addColorStop(1, "#26303e");
+            ctx.fillStyle = g;
+            ctx.beginPath();
+            ctx.arc(0, 0, size, 0, Math.PI * 2);
+            ctx.fill();
+          } else if (obj.shape === 1) {
+            ctx.fillStyle = "#4d5968";
+            ctx.fillRect(-size, -size * .6, size * 2, size * 1.2);
+          } else if (obj.shape === 2) {
+            ctx.strokeStyle = "rgba(198,211,226,.72)";
+            ctx.lineWidth = Math.max(1, size * .16);
+            ctx.beginPath();
+            ctx.arc(0, 0, size, 0, Math.PI * 2);
+            ctx.stroke();
+          } else {
+            ctx.fillStyle = "#747b85";
+            ctx.beginPath();
+            ctx.moveTo(0, -size);
+            ctx.lineTo(size * .82, size * .72);
+            ctx.lineTo(-size * .82, size * .72);
+            ctx.closePath();
+            ctx.fill();
+          }
+        }
+
+        if (obj.action) {
+          ctx.strokeStyle = "rgba(255,255,255,.34)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(0, 0, size * 1.22, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        ctx.restore();
+      }
+
+      function wrapText(text: string, x: number, y: number, maxWidth: number, lineHeight: number) {
+        const words = String(text).split(/\s+/);
+        let line = "";
+        let yy = y;
+        for (const word of words) {
+          const test = line ? `${line} ${word}` : word;
+          if (ctx.measureText(test).width > maxWidth && line) {
+            ctx.fillText(line, x, yy);
+            line = word;
+            yy += lineHeight;
+          } else {
+            line = test;
+          }
+        }
+        if (line) ctx.fillText(line, x, yy);
+      }
+
+      function drawStation(index: number, now: number) {
+        const station = stations[index];
+        const center = stationCenter(index);
+        const cp = project(center);
+        if (!cp || cp.depth > 54) return;
+
+        const alpha = Math.max(.12, Math.min(1, 1 - cp.depth / 60));
+        for (const obj of layouts[index]) drawSceneObject(center, obj, alpha * .84, now);
+
+        const colors = themeColors(station.theme);
+        const scale = cp.scale;
+        const current = index === arrivingAt;
+        const lift = current ? paperOpen * 0.85 * scale : 0;
+
+        const imageW = 5.4 * scale;
+        const imageH = 5.9 * scale;
+        const imageX = cp.x - imageW * .5;
+        const imageY = cp.y - imageH * .58 - lift;
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = "#141414";
+        ctx.fillRect(imageX - 10, imageY - 10, imageW + 20, imageH + 20);
+
+        const art = ctx.createLinearGradient(imageX, imageY, imageX + imageW, imageY + imageH);
+        art.addColorStop(0, colors[0]);
+        art.addColorStop(.52, colors[1]);
+        art.addColorStop(1, colors[2]);
+        ctx.fillStyle = art;
+        ctx.fillRect(imageX, imageY, imageW, imageH);
+
+        ctx.fillStyle = "rgba(255,255,255,.86)";
+        ctx.font = `${Math.max(11, Math.min(22, scale * .24))}px ui-sans-serif, system-ui`;
+        ctx.textAlign = "left";
+        ctx.fillText(station.label, imageX + 16, imageY + imageH - 18);
+
+        // The paper is always present. Closed = perpendicular/edge-on to the image.
+        const open = current ? paperOpen : 0;
+        const paperW = 5.0 * scale;
+        const paperFullH = 3.15 * scale;
+        const paperClosedH = Math.max(8, paperFullH * .10);
+        const paperH = paperClosedH + (paperFullH - paperClosedH) * open;
+        const paperX = cp.x - paperW * .5;
+        const paperY = cp.y + imageH * .25 - open * .18 * scale;
+
+        ctx.fillStyle = "#e9e3d7";
+        ctx.fillRect(paperX, paperY, paperW, paperH);
+        ctx.strokeStyle = "rgba(90,80,68,.35)";
+        ctx.strokeRect(paperX, paperY, paperW, paperH);
+
+        if (current) {
+          lastPaperRect = {
+            x: paperX,
+            y: paperY - Math.max(8, paperClosedH),
+            w: paperW,
+            h: Math.max(paperH, 24)
+          };
+        }
+
+        if (open > .16) {
+          const stationText = paperTextOverride ?? station.text;
+          ctx.globalAlpha = alpha * Math.min(1, (open - .16) / .5);
+          ctx.fillStyle = "#23211f";
+          ctx.font = `600 ${Math.max(10, Math.min(19, scale * .21))}px ui-sans-serif, system-ui`;
+          wrapText(stationText.title ?? "", paperX + 18, paperY + 30, paperW - 36, 24);
+          ctx.fillStyle = "#514d48";
+          ctx.font = `${Math.max(9, Math.min(15, scale * .15))}px ui-sans-serif, system-ui`;
+          wrapText(stationText.body ?? "", paperX + 18, paperY + Math.max(62, scale * .66), paperW - 36, 19);
+        }
+
+        ctx.restore();
+      }
+
+      function arrived() {
+        return Math.abs(cameraZ - targetZ) < 0.08;
+      }
+
+      function requestStation(index: number) {
+        arrivingAt = Math.max(0, Math.min(stations.length - 1, index));
+        targetZ = stationZ(arrivingAt) + 8.5;
+        paperOpen = 0;
+        paperTarget = 0;
+        paperTextOverride = null;
+        lastPaperRect = null;
+        status && (status.textContent = `Traveling to ${stations[arrivingAt].label}`);
+      }
+
+      function executeAction(action: AssetAction | undefined) {
+        if (!action) return;
+        if (action.type === "station") {
+          const index = stations.findIndex((station: any) => station.id === action.stationId);
+          if (index >= 0) requestStation(index);
+          return;
+        }
+        if (action.type === "link") {
+          const destination = resolvedLinks[action.linkKey];
+          if (typeof destination === "string") window.location.assign(destination);
+          return;
+        }
+        if (action.type === "url") {
+          if (typeof action.url === "string") window.location.assign(action.url);
+          return;
+        }
+        if (action.type === "text") {
+          paperTextOverride = { title: action.title, body: action.body };
+          paperTarget = 1;
+        }
+      }
+
+      function findHitObject(x: number, y: number) {
+        const objects = layouts[arrivingAt]
+          .filter((obj: SceneObject) => obj.lastScreen)
+          .sort((a: SceneObject, b: SceneObject) => (a.lastScreen?.depth ?? 999) - (b.lastScreen?.depth ?? 999));
+
+        for (const obj of objects) {
+          const s = obj.lastScreen;
+          if (!s) continue;
+          if (Math.hypot(x - s.x, y - s.y) <= s.radius) return obj;
+        }
+        return null;
+      }
+
+      function update(now: number, dt: number) {
+        const dz = targetZ - cameraZ;
+        if (Math.abs(dz) > 0.04) {
+          cameraZ += Math.sign(dz) * Math.min(Math.abs(dz), rideSpeed * dt);
+        } else {
+          cameraZ = targetZ;
+        }
+
+        paperOpen += (paperTarget - paperOpen) * Math.min(1, dt * 4.0);
+        lookYaw += (targetYaw - lookYaw) * Math.min(1, dt * 4.0);
+        lookPitch += (targetPitch - lookPitch) * Math.min(1, dt * 4.0);
+        updateObjects(now, dt);
+      }
+
+      function drawHud() {
+        ctx.save();
+        ctx.fillStyle = "rgba(255,255,255,.88)";
+        ctx.font = "600 14px ui-sans-serif, system-ui";
+        ctx.fillText("Design it Your Way", 24, 30);
+        ctx.fillStyle = "rgba(255,255,255,.48)";
+        ctx.font = "12px ui-sans-serif, system-ui";
+        ctx.fillText("UNIQUENESS-REWARDED · PRISM RAIL / TOP FACE", 24, 50);
+
+        const hint = arrived()
+          ? "Click the paper to present it · drag or toss floating objects · move mouse to look · ← → ride"
+          : "Riding the thread…";
+
+        ctx.textAlign = "center";
+        ctx.fillText(hint, width * .5, height - 24);
+        ctx.textAlign = "right";
+        ctx.fillText(`${arrivingAt + 1} / ${stations.length}`, width - 24, 30);
+        ctx.restore();
+      }
+
+      function render(now: number) {
+        resize();
+        const dt = Math.min((now - previous) / 1000, 1 / 30);
+        previous = now;
+        update(now, dt);
+
+        lastPaperRect = null;
+        for (const layout of layouts) {
+          for (const obj of layout) obj.lastScreen = undefined;
+        }
+
+        drawBackground();
+        drawRail();
+
+        const drawOrder = stations
+          .map((_: any, index: number) => index)
+          .sort((a: number, b: number) => stationZ(a) - stationZ(b));
+
+        for (const index of drawOrder) drawStation(index, now);
+
+        const vignette = ctx.createRadialGradient(
+          width * .5, height * .5, Math.min(width, height) * .25,
+          width * .5, height * .5, Math.max(width, height) * .72
+        );
+        vignette.addColorStop(0, "rgba(0,0,0,0)");
+        vignette.addColorStop(1, "rgba(0,0,0,.6)");
+        ctx.fillStyle = vignette;
+        ctx.fillRect(0, 0, width, height);
+
+        drawHud();
+        requestAnimationFrame(render);
+      }
+
+      function pointIn(rect: { x: number; y: number; w: number; h: number } | null, x: number, y: number) {
+        return !!rect && x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
+      }
+
+      gameCanvas.addEventListener("pointerdown", (event) => {
+        if (!arrived()) return;
+        const rect = gameCanvas.getBoundingClientRect();
+        pointerX = event.clientX - rect.left;
+        pointerY = event.clientY - rect.top;
+
+        const obj = findHitObject(pointerX, pointerY);
+        if (obj) {
+          grabbed = { stationIndex: arrivingAt, object: obj };
+          dragLastX = pointerX;
+          dragLastY = pointerY;
+          dragLastTime = performance.now();
+          draggedDistance = 0;
+          gameCanvas.setPointerCapture(event.pointerId);
+        }
+      });
+
+      gameCanvas.addEventListener("pointermove", (event) => {
+        const rect = gameCanvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        pointerX = x;
+        pointerY = y;
+
+        if (grabbed) {
+          const now = performance.now();
+          const dt = Math.max((now - dragLastTime) / 1000, 0.001);
+          const dx = x - dragLastX;
+          const dy = y - dragLastY;
+          const obj = grabbed.object;
+          const sensitivity = 0.012;
+          obj.local.x += dx * sensitivity;
+          obj.local.y -= dy * sensitivity;
+
+          const maxToss = Number(motion.maxTossSpeed) || 2.6;
+          obj.velocity.x = Math.max(-maxToss, Math.min(maxToss, (dx / dt) * 0.0025));
+          obj.velocity.y = Math.max(-maxToss, Math.min(maxToss, (-dy / dt) * 0.0025));
+          draggedDistance += Math.hypot(dx, dy);
+          constrainToSphere(obj);
+
+          dragLastX = x;
+          dragLastY = y;
+          dragLastTime = now;
+          gameCanvas.style.cursor = "grabbing";
+          return;
+        }
+
+        const nx = x / Math.max(1, rect.width) - .5;
+        const ny = y / Math.max(1, rect.height) - .5;
+        targetYaw = nx * .34;
+        targetPitch = -ny * .20;
+
+        const hover = findHitObject(x, y);
+        gameCanvas.style.cursor = hover || pointIn(lastPaperRect, x, y) ? "pointer" : "crosshair";
+      });
+
+      function releasePointer(event: PointerEvent) {
+        if (!grabbed) return;
+        const obj = grabbed.object;
+        const wasClick = draggedDistance < 6;
+        grabbed = null;
+        if (gameCanvas.hasPointerCapture(event.pointerId)) gameCanvas.releasePointerCapture(event.pointerId);
+        if (wasClick) executeAction(obj.action);
+      }
+
+      gameCanvas.addEventListener("pointerup", releasePointer);
+      gameCanvas.addEventListener("pointercancel", releasePointer);
+
+      gameCanvas.addEventListener("pointerleave", () => {
+        if (!grabbed) {
+          targetYaw = 0;
+          targetPitch = -0.02;
+        }
+      });
+
+      gameCanvas.addEventListener("click", (event) => {
+        if (!arrived() || draggedDistance >= 6) return;
+        const rect = gameCanvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        if (findHitObject(x, y)) return;
+
+        if (pointIn(lastPaperRect, x, y)) {
+          paperTarget = paperTarget > .5 ? 0 : 1;
+        }
+      });
+
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          requestStation(Math.min(stations.length - 1, arrivingAt + 1));
+        }
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          requestStation(Math.max(0, arrivingAt - 1));
+        }
+        if (event.key === "Home") requestStation(0);
+      });
+
+      requestStation(0);
+      requestAnimationFrame(render);
+    }
+  }
+</script>
+
+<style>
+  .presentation {
+    position:fixed;
+    inset:0;
+    width:100vw;
+    height:100vh;
+    overflow:hidden;
+    background:#030405;
+  }
+
+  canvas {
+    display:block;
+    width:100%;
+    height:100%;
+    touch-action:none;
+    cursor:crosshair;
+  }
+
+  .sr-only {
+    position:absolute;
+    width:1px;
+    height:1px;
+    padding:0;
+    margin:-1px;
+    overflow:hidden;
+    clip:rect(0,0,0,0);
+    white-space:nowrap;
+    border:0;
+  }
+</style>

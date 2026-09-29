@@ -1,0 +1,472 @@
+---
+export interface Props {
+  title?: string;
+  description?: string;
+  demoUrl?: string;
+}
+
+const {
+  title = "Squash & Stretch",
+  description = "Grab it, throw it, steer it, and watch impact and velocity deform the body. The same placement can later swap between JavaScript and WebAssembly runtimes.",
+  demoUrl
+} = Astro.props;
+---
+<section class="wasm-showcase" data-webrev-id="wasm-showcase.squash-ball">
+  <div class="copy">
+    <div class="eyebrow">WASM SHOWCASE</div>
+    <h2>{title}</h2>
+    <p>{description}</p>
+
+    <div class="controls">
+      <div><kbd>WASD</kbd> / <kbd>↑↓←→</kbd><span>push the ball</span></div>
+      <div><kbd>Mouse</kbd> / <kbd>Touch</kbd><span>grab, drag, throw</span></div>
+      <div><kbd>R</kbd><span>reset</span></div>
+    </div>
+
+    <div class="meta">
+      <span>graphics</span>
+      <span>physics</span>
+      <span>input</span>
+      <span>agent-inspectable</span>
+    </div>
+  </div>
+
+  <div class="stage" aria-label="Interactive squash and stretch bouncing ball demo">
+    <canvas id="squash-ball-canvas" width="900" height="520"></canvas>
+    <div class="hud">
+      <span id="runtime-label">Runtime: JavaScript fallback · WASM slot ready</span>
+      <span id="velocity-label">0 px/s</span>
+      {demoUrl && <a href={demoUrl} target="_blank" rel="noreferrer">Open full demo ↗</a>}
+    </div>
+  </div>
+</section>
+
+<script>
+  const canvas = document.getElementById("squash-ball-canvas");
+  const runtimeLabel = document.getElementById("runtime-label");
+  const velocityLabel = document.getElementById("velocity-label");
+
+  if (canvas instanceof HTMLCanvasElement) {
+    const demoCanvas: HTMLCanvasElement = canvas;
+    const context = demoCanvas.getContext("2d");
+
+    if (context) {
+      const ctx: CanvasRenderingContext2D = context;
+      const radius = 48;
+      const gravity = 1550;
+      const restitution = 0.82;
+      const wallRestitution = 0.8;
+      const airDrag = 0.998;
+      const keyboardAcceleration = 1200;
+      const maxThrowSpeed = 2200;
+
+      let x = 300;
+      let y = 110;
+      let vx = 180;
+      let vy = 0;
+
+      let impactX = 0;
+      let impactY = 0;
+      let dragging = false;
+      let pointerOffsetX = 0;
+      let pointerOffsetY = 0;
+      let lastPointerX = 0;
+      let lastPointerY = 0;
+      let lastPointerTime = performance.now();
+      let pointerVx = 0;
+      let pointerVy = 0;
+
+      const keys = new Set<string>();
+      let previous = performance.now();
+
+      function clamp(value: number, min: number, max: number) {
+        return Math.max(min, Math.min(max, value));
+      }
+
+      function reset() {
+        const rect = demoCanvas.getBoundingClientRect();
+        x = Math.max(radius + 40, rect.width * 0.36);
+        y = 90;
+        vx = 160;
+        vy = 0;
+        impactX = 0;
+        impactY = 0;
+        dragging = false;
+      }
+
+      function resizeForDpr() {
+        const rect = demoCanvas.getBoundingClientRect();
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const width = Math.max(1, Math.floor(rect.width * dpr));
+        const height = Math.max(1, Math.floor(rect.height * dpr));
+
+        if (demoCanvas.width !== width || demoCanvas.height !== height) {
+          demoCanvas.width = width;
+          demoCanvas.height = height;
+        }
+
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        return { width: rect.width, height: rect.height };
+      }
+
+      function pointerPosition(event: PointerEvent) {
+        const rect = demoCanvas.getBoundingClientRect();
+        return {
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top
+        };
+      }
+
+      demoCanvas.addEventListener("pointerdown", (event) => {
+        const p = pointerPosition(event);
+        const dx = p.x - x;
+        const dy = p.y - y;
+
+        if (Math.hypot(dx, dy) <= radius * 1.35) {
+          dragging = true;
+          demoCanvas.setPointerCapture(event.pointerId);
+          pointerOffsetX = dx;
+          pointerOffsetY = dy;
+          lastPointerX = p.x;
+          lastPointerY = p.y;
+          lastPointerTime = performance.now();
+          pointerVx = 0;
+          pointerVy = 0;
+          impactX = 0;
+          impactY = 0;
+          vx = 0;
+          vy = 0;
+        }
+      });
+
+      demoCanvas.addEventListener("pointermove", (event) => {
+        if (!dragging) return;
+
+        const p = pointerPosition(event);
+        const now = performance.now();
+        const dt = Math.max((now - lastPointerTime) / 1000, 0.001);
+
+        pointerVx = clamp((p.x - lastPointerX) / dt, -maxThrowSpeed, maxThrowSpeed);
+        pointerVy = clamp((p.y - lastPointerY) / dt, -maxThrowSpeed, maxThrowSpeed);
+
+        x = p.x - pointerOffsetX;
+        y = p.y - pointerOffsetY;
+
+        lastPointerX = p.x;
+        lastPointerY = p.y;
+        lastPointerTime = now;
+      });
+
+      function releasePointer(event: PointerEvent) {
+        if (!dragging) return;
+
+        dragging = false;
+        vx = pointerVx;
+        vy = pointerVy;
+
+        if (demoCanvas.hasPointerCapture(event.pointerId)) {
+          demoCanvas.releasePointerCapture(event.pointerId);
+        }
+      }
+
+      demoCanvas.addEventListener("pointerup", releasePointer);
+      demoCanvas.addEventListener("pointercancel", releasePointer);
+
+      window.addEventListener("keydown", (event) => {
+        const key = event.key.toLowerCase();
+
+        if (["arrowup", "arrowdown", "arrowleft", "arrowright", "w", "a", "s", "d"].includes(key)) {
+          event.preventDefault();
+          keys.add(key);
+        }
+
+        if (key === "r") reset();
+      });
+
+      window.addEventListener("keyup", (event) => {
+        keys.delete(event.key.toLowerCase());
+      });
+
+      function draw(now: number) {
+        const dt = Math.min((now - previous) / 1000, 1 / 30);
+        previous = now;
+
+        const { width, height } = resizeForDpr();
+        const floorY = height - 62;
+        const left = radius + 22;
+        const right = width - radius - 22;
+        const ceiling = radius + 18;
+        const floor = floorY - radius;
+
+        if (!dragging) {
+          let ax = 0;
+          let ay = gravity;
+
+          if (keys.has("a") || keys.has("arrowleft")) ax -= keyboardAcceleration;
+          if (keys.has("d") || keys.has("arrowright")) ax += keyboardAcceleration;
+          if (keys.has("w") || keys.has("arrowup")) ay -= keyboardAcceleration * 1.45;
+          if (keys.has("s") || keys.has("arrowdown")) ay += keyboardAcceleration * 0.75;
+
+          vx += ax * dt;
+          vy += ay * dt;
+          vx *= Math.pow(airDrag, dt * 60);
+
+          x += vx * dt;
+          y += vy * dt;
+
+          if (x < left) {
+            x = left;
+            impactX = Math.min(Math.abs(vx) / 1000, 1);
+            vx = Math.abs(vx) * wallRestitution;
+          } else if (x > right) {
+            x = right;
+            impactX = Math.min(Math.abs(vx) / 1000, 1);
+            vx = -Math.abs(vx) * wallRestitution;
+          }
+
+          if (y < ceiling) {
+            y = ceiling;
+            impactY = Math.min(Math.abs(vy) / 1000, 1);
+            vy = Math.abs(vy) * wallRestitution;
+          } else if (y > floor) {
+            y = floor;
+            impactY = Math.min(Math.abs(vy) / 950, 1);
+            vy = -Math.abs(vy) * restitution;
+
+            if (Math.abs(vy) < 110) {
+              vy = -420;
+            }
+          }
+        } else {
+          x = clamp(x, left, right);
+          y = clamp(y, ceiling, floor);
+        }
+
+        impactX *= Math.pow(0.055, dt);
+        impactY *= Math.pow(0.055, dt);
+
+        const speed = Math.hypot(vx, vy);
+        const stretch = clamp(speed / 1500, 0, 0.48);
+
+        let scaleX = 1;
+        let scaleY = 1;
+
+        if (dragging) {
+          const dragSpeed = Math.hypot(pointerVx, pointerVy);
+          const dragStretch = clamp(dragSpeed / 1700, 0, 0.32);
+          scaleX = 1 - dragStretch * 0.14;
+          scaleY = 1 + dragStretch * 0.28;
+        } else {
+          const verticalBias = Math.abs(vy) / Math.max(Math.abs(vx) + Math.abs(vy), 1);
+          const horizontalBias = 1 - verticalBias;
+
+          scaleY += stretch * 0.34 * verticalBias;
+          scaleX -= stretch * 0.16 * verticalBias;
+
+          scaleX += stretch * 0.34 * horizontalBias;
+          scaleY -= stretch * 0.16 * horizontalBias;
+        }
+
+        scaleX += impactY * 0.42 - impactX * 0.28;
+        scaleY += impactX * 0.42 - impactY * 0.34;
+
+        scaleX = clamp(scaleX, 0.66, 1.48);
+        scaleY = clamp(scaleY, 0.66, 1.48);
+
+        ctx.clearRect(0, 0, width, height);
+
+        const bg = ctx.createRadialGradient(
+          width * 0.5,
+          height * 0.38,
+          24,
+          width * 0.5,
+          height * 0.5,
+          Math.max(width, height) * 0.78
+        );
+        bg.addColorStop(0, "rgba(75,95,150,.20)");
+        bg.addColorStop(1, "rgba(4,6,10,0)");
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, width, height);
+
+        ctx.strokeStyle = "rgba(255,255,255,.12)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(22, floorY);
+        ctx.lineTo(width - 22, floorY);
+        ctx.stroke();
+
+        const heightFromFloor = Math.max(0, floor - y);
+        const shadowScale = clamp(1 - heightFromFloor / 500, 0.25, 1);
+
+        ctx.save();
+        ctx.translate(x, floorY + 8);
+        ctx.scale(shadowScale, 1);
+        const shadow = ctx.createRadialGradient(0, 0, 5, 0, 0, 70);
+        shadow.addColorStop(0, "rgba(0,0,0,.55)");
+        shadow.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = shadow;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 70, 14, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.scale(scaleX, scaleY);
+
+        const glow = ctx.createRadialGradient(-18, -20, 7, 0, 0, radius * 1.4);
+        glow.addColorStop(0, "#ffffff");
+        glow.addColorStop(0.13, "#e5f1ff");
+        glow.addColorStop(0.43, "#7eafff");
+        glow.addColorStop(0.78, "#375ea9");
+        glow.addColorStop(1, "#18274d");
+
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = dragging ? "rgba(255,255,255,.72)" : "rgba(255,255,255,.24)";
+        ctx.lineWidth = dragging ? 2 : 1;
+        ctx.stroke();
+        ctx.restore();
+
+        if (velocityLabel) {
+          velocityLabel.textContent = `${Math.round(speed)} px/s${dragging ? " · grabbed" : ""}`;
+        }
+
+        requestAnimationFrame(draw);
+      }
+
+      runtimeLabel && (runtimeLabel.textContent = "Runtime: JavaScript fallback · WASM slot ready");
+      reset();
+      requestAnimationFrame(draw);
+    }
+  }
+</script>
+
+<style>
+  .wasm-showcase {
+    display: grid;
+    grid-template-columns: minmax(220px, .72fr) minmax(0, 1.7fr);
+    gap: 28px;
+    align-items: stretch;
+    margin-top: 42px;
+  }
+
+  .copy,
+  .stage {
+    border: 1px solid rgba(255,255,255,.1);
+    background: rgba(255,255,255,.035);
+    backdrop-filter: blur(16px);
+    border-radius: 28px;
+  }
+
+  .copy {
+    padding: 26px;
+  }
+
+  .eyebrow {
+    font-size: .72rem;
+    letter-spacing: .2em;
+    opacity: .58;
+  }
+
+  h2 {
+    font-size: clamp(2rem, 4vw, 3.5rem);
+    margin: .35em 0 .25em;
+    letter-spacing: -.04em;
+  }
+
+  p {
+    color: #b8bdc7;
+    line-height: 1.65;
+  }
+
+  .controls {
+    display: grid;
+    gap: 10px;
+    margin-top: 24px;
+  }
+
+  .controls div {
+    display: grid;
+    grid-template-columns: minmax(92px, auto) 1fr;
+    gap: 10px;
+    align-items: center;
+    color: #aeb6c5;
+    font-size: .82rem;
+  }
+
+  kbd {
+    display: inline-block;
+    margin-right: 4px;
+    border: 1px solid rgba(255,255,255,.15);
+    border-bottom-color: rgba(255,255,255,.3);
+    background: rgba(255,255,255,.06);
+    border-radius: 7px;
+    padding: 3px 6px;
+    font: inherit;
+    color: #f5f7fb;
+  }
+
+  .meta {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 24px;
+  }
+
+  .meta span {
+    border: 1px solid rgba(255,255,255,.1);
+    border-radius: 999px;
+    padding: 6px 10px;
+    font-size: .72rem;
+    color: #cdd3dd;
+  }
+
+  .stage {
+    position: relative;
+    min-height: 440px;
+    overflow: hidden;
+    touch-action: none;
+    cursor: grab;
+  }
+
+  .stage:active {
+    cursor: grabbing;
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-height: 440px;
+  }
+
+  .hud {
+    position: absolute;
+    left: 18px;
+    right: 18px;
+    bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: .76rem;
+    color: #aeb6c5;
+    pointer-events: none;
+  }
+
+  .hud a {
+    color: #fff;
+    text-decoration: none;
+    pointer-events: auto;
+  }
+
+  @media (max-width: 800px) {
+    .wasm-showcase {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

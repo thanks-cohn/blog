@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 2,
+  "title": "Design it Your Way",
+  "rail": {
+    "shape": "hexagonal-prism",
+    "activeFace": "top",
+    "supportedFaces": [
+      "top",
+      "upper-right",
+      "lower-right",
+      "bottom",
+      "lower-left",
+      "upper-left"
+    ],
+    "speed": 7.5,
+    "stationSpacing": 26,
+    "prismRadius": 3.4
+  },
+  "arrangement": {
+    "mode": "seeded-once",
+    "seed": 81723,
+    "assetDirectory": "3d assets",
+    "viewportExclusion": {
+      "shape": "rectangular-prism",
+      "width": 7.2,
+      "height": 8.6,
+      "depth": 4,
+      "padding": 1.1,
+      "rule": "decor-must-remain-outside"
+    },
+    "influenceSphere": {
+      "radius": 6.4,
+      "innerRadius": 4.2,
+      "defaultObjectCount": 12
+    },
+    "assetNaming": "<artworkName>-<number>.<ext>",
+    "assetDirectories": {
+      "2d": "apps/playground/src/assets/2d-assets",
+      "3d": "apps/playground/src/assets/3d-assets"
+    },
+    "billboard2d": {
+      "enabled": true,
+      "facingStrength": 0.965,
+      "maxYawDegrees": 5,
+      "maxPitchDegrees": 4,
+      "wobbleDegrees": 1.4,
+      "wobbleSpeed": 0.28,
+      "spring": 2.2,
+      "damping": 0.94
+    },
+    "motion": {
+      "floatStrength": 0.08,
+      "floatSpeed": 0.22,
+      "tossDamping": 0.992,
+      "boundaryRestitution": 0.5,
+      "maxTossSpeed": 2.6
+    }
+  },
+  "stations": [
+    {
+      "id": "first-light",
+      "artworkName": "first-light",
+      "label": "First Light",
+      "theme": "amber",
+      "text": {
+        "title": "Make the space yours.",
+        "body": "Replace the portrait, surround it with your own objects, and let the ride carry people into the arrangement."
+      },
+      "reveal": {
+        "mode": "timer",
+        "delayMs": 1700
+      }
+    },
+    {
+      "id": "blue-room",
+      "artworkName": "blue-room",
+      "label": "Blue Room",
+      "theme": "blue",
+      "text": {
+        "title": "The route is part of the design.",
+        "body": "The camera rides the visible thread. Later, any face of the six-sided prism can become the route."
+      },
+      "reveal": {
+        "mode": "click",
+        "delayMs": 0
+      }
+    },
+    {
+      "id": "rose-archive",
+      "artworkName": "rose-archive",
+      "label": "Rose Archive",
+      "theme": "rose",
+      "text": {
+        "title": "Start with a format. End somewhere personal.",
+        "body": "Change the picture, the paper, the route, the speed, the surrounding objects, or the entire arrangement."
+      },
+      "reveal": {
+        "mode": "timer",
+        "delayMs": 2200
+      }
+    }
+  ],
+  "assetActions": {}
+}

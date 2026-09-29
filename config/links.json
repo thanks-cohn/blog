@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "links": {
+    "home": "",
+    "world": "world/",
+    "legacyDemo": "wasm/",
+    "inspection": "__webrev/revision",
+    "discovery": ".well-known/webrev.json",
+    "uniquenessRewarded": "uniqueness-rewarded/"
+  }
+}

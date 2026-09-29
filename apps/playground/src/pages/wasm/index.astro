@@ -1,0 +1,18 @@
+---
+import { resolveLink } from "@webrev/core";
+import linksConfig from "../../../../../config/links.json";
+
+const worldHref = resolveLink(linksConfig, "world", import.meta.env.BASE_URL);
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta http-equiv="refresh" content={`0; url=${worldHref}`} />
+    <link rel="canonical" href={worldHref} />
+    <title>Opening The World in 3D…</title>
+  </head>
+  <body>
+    <p><a href={worldHref}>Open The World in 3D</a></p>
+  </body>
+</html>
