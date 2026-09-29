@@ -71,7 +71,8 @@
       "reveal": {
         "mode": "timer",
         "delayMs": 1700
-      }
+      },
+      "assetDisplayMode": "assets-only"
     },
     {
       "id": "blue-room",
@@ -85,7 +86,8 @@
       "reveal": {
         "mode": "click",
         "delayMs": 0
-      }
+      },
+      "assetDisplayMode": "assets-and-proxies"
     },
     {
       "id": "rose-archive",
@@ -99,7 +101,8 @@
       "reveal": {
         "mode": "timer",
         "delayMs": 2200
-      }
+      },
+      "assetDisplayMode": "assets-and-proxies"
     }
   ],
   "assetActions": {}
