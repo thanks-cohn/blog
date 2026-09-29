@@ -185,7 +185,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const discovered = Array.isArray(assetsByArtwork[station.artworkName])
           ? assetsByArtwork[station.artworkName]
           : [];
-        const count = discovered.length;
+        const count = discovered.length || Number(sphere.defaultObjectCount) || 10;
         const result: SceneObject[] = [];
 
         for (let i = 0; i < count; i++) {
@@ -417,10 +417,37 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             ctx.strokeStyle = "rgba(255,255,255,.28)";
             ctx.strokeRect(-size, -size * .72, size * 2, size * 1.44);
           }
-        } else {
-          // Real GLB/GLTF assets are discovered and tracked, but this 2D canvas
-          // renderer must not invent replacement geometry for them.
-          // A real GLB renderer will render obj.url; until then, draw nothing.
+        } else if (!obj.url) {
+          // No uploaded 3D asset exists for this slot, so render a mathematical
+          // proxy placeholder. Uploaded GLB/GLTF assets must never be replaced
+          // by proxy geometry.
+          ctx.rotate(obj.spin);
+          if (obj.shape === 0) {
+            const g = ctx.createRadialGradient(-size * .2, -size * .25, 0, 0, 0, size);
+            g.addColorStop(0, "#d9e4f2");
+            g.addColorStop(1, "#26303e");
+            ctx.fillStyle = g;
+            ctx.beginPath();
+            ctx.arc(0, 0, size, 0, Math.PI * 2);
+            ctx.fill();
+          } else if (obj.shape === 1) {
+            ctx.fillStyle = "#4d5968";
+            ctx.fillRect(-size, -size * .6, size * 2, size * 1.2);
+          } else if (obj.shape === 2) {
+            ctx.strokeStyle = "rgba(198,211,226,.72)";
+            ctx.lineWidth = Math.max(1, size * .16);
+            ctx.beginPath();
+            ctx.arc(0, 0, size, 0, Math.PI * 2);
+            ctx.stroke();
+          } else {
+            ctx.fillStyle = "#747b85";
+            ctx.beginPath();
+            ctx.moveTo(0, -size);
+            ctx.lineTo(size * .82, size * .72);
+            ctx.lineTo(-size * .82, size * .72);
+            ctx.closePath();
+            ctx.fill();
+          }
         }
 
         if (obj.action) {
