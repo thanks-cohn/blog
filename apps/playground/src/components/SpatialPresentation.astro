@@ -183,6 +183,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
     | "sphere.restitution"
     | "viewport.enabled"
     | "viewport.paddingPx"
+    | "initialPlacement.keepViewerImageSightlineClear"
     | "debug.glbGlobe.enabled"
     | "debug.glbGlobe.objectName"
     | "editor.mode"
@@ -219,6 +220,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
       enabled: boolean;
       paddingPx: number;
     };
+    initialPlacement: {
+      keepViewerImageSightlineClear: boolean;
+    };
     debug: {
       glbGlobe: {
         enabled: boolean;
@@ -246,7 +250,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
   type SettingDescriptor = {
     key: PresentationSettingKey;
     label: string;
-    group: "sphere" | "camera" | "viewport" | "debug" | "editor" | "textPlane";
+    group: "sphere" | "camera" | "viewport" | "initialPlacement" | "debug" | "editor" | "textPlane";
     control: "number" | "select" | "toggle" | "color";
     description?: string;
     min?: number;
@@ -718,6 +722,14 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
             Number(station?.viewport?.paddingPx ?? config.arrangement?.viewport?.paddingPx ?? 18)
           )
         },
+        initialPlacement: {
+          keepViewerImageSightlineClear:
+            typeof station?.initialPlacement?.keepViewerImageSightlineClear === "boolean"
+              ? station.initialPlacement.keepViewerImageSightlineClear
+              : typeof config.arrangement?.initialPlacement?.keepViewerImageSightlineClear === "boolean"
+                ? config.arrangement.initialPlacement.keepViewerImageSightlineClear
+                : true
+        },
         debug: {
           glbGlobe: {
             enabled: Boolean(station?.debug?.glbGlobe?.enabled ?? config.arrangement?.debug?.glbGlobe?.enabled ?? false),
@@ -759,6 +771,11 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         viewport: {
           enabled: Boolean(source.viewport.enabled),
           paddingPx: Number(source.viewport.paddingPx)
+        },
+        initialPlacement: {
+          keepViewerImageSightlineClear: Boolean(
+            source.initialPlacement.keepViewerImageSightlineClear
+          )
         },
         debug: {
           glbGlobe: {
@@ -835,6 +852,12 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           paddingPx: Number.isFinite(Number(raw?.viewport?.paddingPx))
             ? Math.max(0, Number(raw.viewport.paddingPx))
             : defaults.viewport.paddingPx
+        },
+        initialPlacement: {
+          keepViewerImageSightlineClear:
+            typeof raw?.initialPlacement?.keepViewerImageSightlineClear === "boolean"
+              ? raw.initialPlacement.keepViewerImageSightlineClear
+              : defaults.initialPlacement.keepViewerImageSightlineClear
         },
         debug: {
           glbGlobe: {
@@ -1009,6 +1032,13 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           description: "Second rule: visible geometry cannot leave the screen."
         },
         {
+          key: "initialPlacement.keepViewerImageSightlineClear",
+          label: "Clear image sightline on entry",
+          group: "initialPlacement",
+          control: "toggle",
+          description: "Spawn rule only: objects begin outside the viewer-to-image corridor, but may move through it afterward."
+        },
+        {
           key: "debug.glbGlobe.enabled",
           label: "Debug globe",
           group: "debug",
@@ -1121,6 +1151,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         if (key === "sphere.restitution") return presentationSettings.sphere.restitution;
         if (key === "viewport.enabled") return presentationSettings.viewport.enabled;
         if (key === "viewport.paddingPx") return presentationSettings.viewport.paddingPx;
+        if (key === "initialPlacement.keepViewerImageSightlineClear") return presentationSettings.initialPlacement.keepViewerImageSightlineClear;
         if (key === "debug.glbGlobe.enabled") return presentationSettings.debug.glbGlobe.enabled;
         if (key === "debug.glbGlobe.objectName") return presentationSettings.debug.glbGlobe.objectName;
         if (key === "editor.mode") return presentationSettings.editor.mode;
@@ -1168,6 +1199,8 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           presentationSettings.viewport.enabled = Boolean(value);
         } else if (key === "viewport.paddingPx") {
           presentationSettings.viewport.paddingPx = Math.max(0, Number(value) || 0);
+        } else if (key === "initialPlacement.keepViewerImageSightlineClear") {
+          presentationSettings.initialPlacement.keepViewerImageSightlineClear = Boolean(value);
         } else if (key === "debug.glbGlobe.enabled") {
           presentationSettings.debug.glbGlobe.enabled = Boolean(value);
         } else if (key === "debug.glbGlobe.objectName") {
@@ -1573,6 +1606,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
               descriptor.group === "sphere" ? "Sphere geometry" :
               descriptor.group === "camera" ? "Camera" :
               descriptor.group === "viewport" ? "Viewport" :
+              descriptor.group === "initialPlacement" ? "Initial placement" :
               descriptor.group === "debug" ? "Debug" :
               descriptor.group === "editor" ? "Edit Layer" :
               "Text plane";
@@ -1983,6 +2017,78 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         };
       }
 
+      function initialPlacementSettingsFor(station: any) {
+        return stationSettings[station.id]?.initialPlacement ??
+          defaultsForStation(station).initialPlacement;
+      }
+
+      function keepInitialViewerImageSightlineClear(
+        station: any,
+        obj: SceneObject,
+        rand: () => number
+      ) {
+        if (!initialPlacementSettingsFor(station).keepViewerImageSightlineClear) return;
+        if (obj.hemisphere === "back" || obj.local.z <= 0) return;
+
+        // Main image plane is 5.4 x 5.9. Add the object's canonical envelope
+        // plus a small breathing gap so its visible body does not begin directly
+        // between the visitor and the picture.
+        const bodyRadius = objectBodyRadius(obj);
+        const gap = 0.18;
+        const clearHalfWidth = 2.7 + bodyRadius + gap;
+        const clearHalfHeight = 2.95 + bodyRadius + gap;
+
+        if (
+          Math.abs(obj.local.x) >= clearHalfWidth ||
+          Math.abs(obj.local.y) >= clearHalfHeight
+        ) return;
+
+        const maxCenterRadius = Math.max(
+          bodyRadius,
+          sphereRadius() - bodyRadius - 0.001
+        );
+        const xTarget = clearHalfWidth;
+        const yTarget = clearHalfHeight;
+        const canUseX = xTarget < maxCenterRadius;
+        const canUseY = yTarget < maxCenterRadius;
+        if (!canUseX && !canUseY) return;
+
+        const preferX =
+          canUseX &&
+          (!canUseY ||
+            (xTarget - Math.abs(obj.local.x)) <=
+              (yTarget - Math.abs(obj.local.y)));
+
+        const sign = (value: number) =>
+          value < 0 ? -1 : value > 0 ? 1 : rand() < 0.5 ? -1 : 1;
+
+        if (preferX) {
+          obj.local.x = sign(obj.local.x) * xTarget;
+          const xySquared = obj.local.x * obj.local.x + obj.local.y * obj.local.y;
+          const allowedZ = Math.sqrt(Math.max(bodyRadius * bodyRadius, maxCenterRadius * maxCenterRadius - xySquared));
+          obj.local.z = Math.max(bodyRadius, Math.min(Math.abs(obj.local.z), allowedZ));
+        } else {
+          obj.local.y = sign(obj.local.y) * yTarget;
+          const xySquared = obj.local.x * obj.local.x + obj.local.y * obj.local.y;
+          const allowedZ = Math.sqrt(Math.max(bodyRadius * bodyRadius, maxCenterRadius * maxCenterRadius - xySquared));
+          obj.local.z = Math.max(bodyRadius, Math.min(Math.abs(obj.local.z), allowedZ));
+        }
+
+        constrainToSphere(obj);
+
+        // Camera-midpoint anchors are runtime-derived each frame. Preserve the
+        // clear starting composition by updating the runtime offset only.
+        if (obj.anchorMode === "camera-midpoint") {
+          const halfDistance = presentationSettings.camera.distanceFromCenter * 0.5;
+          const side = obj.hemisphere === "back" ? -1 : 1;
+          obj.anchorOffset = {
+            x: obj.local.x,
+            y: obj.local.y,
+            z: obj.local.z - side * halfDistance
+          };
+        }
+      }
+
       function generateLayout(station: any, index: number): SceneObject[] {
         const rand = rngFor(station, index);
         const discovered = Array.isArray(assetsByArtwork[station.artworkName])
@@ -2050,6 +2156,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
             obj.local = currentFixedAnchor(obj);
           }
           enforceHemisphere(obj);
+          keepInitialViewerImageSightlineClear(station, obj, rand);
           obj.anchor = obj.anchorMode === "camera-midpoint"
             ? currentFixedAnchor(obj)
             : { ...obj.local };
