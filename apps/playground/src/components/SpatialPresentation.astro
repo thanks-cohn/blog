@@ -90,11 +90,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   async function ensureThree() {
     if (threeRenderer || !(glbCanvas instanceof HTMLCanvasElement)) return;
     try {
-      const THREE = await import(/* @vite-ignore */ "https://esm.sh/three@0.180.0");
-      const loaderModule = await import(
-        /* @vite-ignore */
-        "https://esm.sh/three@0.180.0/examples/jsm/loaders/GLTFLoader.js"
-      );
+      const threeUrl = "https://esm.sh/three@0.180.0";
+      const loaderUrl = "https://esm.sh/three@0.180.0/examples/jsm/loaders/GLTFLoader.js";
+      const THREE = await import(/* @vite-ignore */ threeUrl);
+      const loaderModule = await import(/* @vite-ignore */ loaderUrl);
       threeModule = THREE;
       threeScene = new THREE.Scene();
       threeCamera = new THREE.PerspectiveCamera(50, 1, 0.05, 250);
