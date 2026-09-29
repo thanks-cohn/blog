@@ -66,6 +66,14 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       <button type="button" id="sphere-settings-close" class="sphere-settings-close" aria-label="Close settings">×</button>
     </div>
 
+    <label class="sphere-diameter-control">
+      <span>Sphere diameter</span>
+      <div class="sphere-diameter-row">
+        <input id="sphere-diameter-input" type="number" min="0.2" step="0.2" inputmode="decimal" />
+        <span class="sphere-diameter-note">Image is the center plane</span>
+      </div>
+    </label>
+
     <label class="sphere-asset-add">
       <span>Add / restore asset</span>
       <select id="sphere-asset-picker">
@@ -124,6 +132,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     | "camera.mouseMovesCamera"
     | "assets.minDistanceFromCenter"
     | "assets.maxDistanceFromCenter"
+    | "assets.sphereDiameter"
     | "collisions.viewport.enabled"
     | "collisions.viewport.restitution"
     | "collisions.viewport.paddingPx"
@@ -139,6 +148,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     assets: {
       minDistanceFromCenter: number;
       maxDistanceFromCenter: number;
+      sphereDiameter: number;
     };
     collisions: {
       viewport: {
@@ -174,6 +184,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   const settingsPanel = document.getElementById("sphere-settings-panel") as HTMLElement | null;
   const settingsClose = document.getElementById("sphere-settings-close") as HTMLButtonElement | null;
   const sphereSizeReadout = document.getElementById("sphere-size-readout");
+  const sphereDiameterInput = document.getElementById("sphere-diameter-input") as HTMLInputElement | null;
   const assetPicker = document.getElementById("sphere-asset-picker") as HTMLSelectElement | null;
   const frontAssetsList = document.getElementById("front-assets-list");
   const backAssetsList = document.getElementById("back-assets-list");
@@ -332,7 +343,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       },
       assets: {
         minDistanceFromCenter: defaultMinDistance,
-        maxDistanceFromCenter: defaultMaxDistance
+        maxDistanceFromCenter: defaultMaxDistance,
+        sphereDiameter: Math.max(defaultMinDistance * 2, Number(config.arrangement?.assetRange?.sphereDiameter ?? defaultMaxDistance * 2))
       },
       collisions: {
         viewport: {
@@ -355,7 +367,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         },
         assets: {
           minDistanceFromCenter: Number(source.assets.minDistanceFromCenter),
-          maxDistanceFromCenter: Number(source.assets.maxDistanceFromCenter)
+          maxDistanceFromCenter: Number(source.assets.maxDistanceFromCenter),
+          sphereDiameter: Number(source.assets.sphereDiameter)
         },
         collisions: {
           viewport: {
@@ -383,6 +396,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const maxDistance = Number.isFinite(loadedMax)
           ? Math.max(minDistance, loadedMax)
           : Math.max(minDistance, settingDefaults.assets.maxDistanceFromCenter);
+        const loadedDiameter = Number(parsed?.assets?.sphereDiameter);
+        const sphereDiameter = Number.isFinite(loadedDiameter)
+          ? Math.max(minDistance * 2, loadedDiameter)
+          : Math.max(minDistance * 2, maxDistance * 2);
+        const diameterRadius = sphereDiameter / 2;
         return {
           camera: {
             mode:
@@ -396,7 +414,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           },
           assets: {
             minDistanceFromCenter: minDistance,
-            maxDistanceFromCenter: maxDistance
+            maxDistanceFromCenter: Math.max(minDistance, diameterRadius),
+            sphereDiameter
           },
           collisions: {
             viewport: {
@@ -442,6 +461,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (key === "camera.mouseMovesCamera") return presentationSettings.camera.mouseMovesCamera;
         if (key === "assets.minDistanceFromCenter") return presentationSettings.assets.minDistanceFromCenter;
         if (key === "assets.maxDistanceFromCenter") return presentationSettings.assets.maxDistanceFromCenter;
+        if (key === "assets.sphereDiameter") return presentationSettings.assets.sphereDiameter;
         if (key === "collisions.viewport.enabled") return presentationSettings.collisions.viewport.enabled;
         if (key === "collisions.viewport.restitution") return presentationSettings.collisions.viewport.restitution;
         if (key === "collisions.viewport.paddingPx") return presentationSettings.collisions.viewport.paddingPx;
@@ -462,12 +482,22 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             next,
             presentationSettings.assets.maxDistanceFromCenter
           );
+          presentationSettings.assets.sphereDiameter = Math.max(
+            presentationSettings.assets.sphereDiameter,
+            presentationSettings.assets.minDistanceFromCenter * 2
+          );
         } else if (key === "assets.maxDistanceFromCenter") {
           const next = Math.max(0, Number(value) || 0);
           presentationSettings.assets.maxDistanceFromCenter = Math.max(
             next,
             presentationSettings.assets.minDistanceFromCenter
           );
+          presentationSettings.assets.sphereDiameter = presentationSettings.assets.maxDistanceFromCenter * 2;
+        } else if (key === "assets.sphereDiameter") {
+          const minimumDiameter = presentationSettings.assets.minDistanceFromCenter * 2;
+          const nextDiameter = Math.max(minimumDiameter, Number(value) || minimumDiameter);
+          presentationSettings.assets.sphereDiameter = nextDiameter;
+          presentationSettings.assets.maxDistanceFromCenter = nextDiameter / 2;
         } else if (key === "collisions.viewport.enabled") {
           presentationSettings.collisions.viewport.enabled = Boolean(value);
         } else if (key === "collisions.viewport.restitution") {
@@ -494,6 +524,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         }
         if (!key || key === "assets.maxDistanceFromCenter") {
           presentationSettings.assets.maxDistanceFromCenter = settingDefaults.assets.maxDistanceFromCenter;
+          presentationSettings.assets.sphereDiameter = settingDefaults.assets.maxDistanceFromCenter * 2;
+        }
+        if (!key || key === "assets.sphereDiameter") {
+          presentationSettings.assets.sphereDiameter = settingDefaults.assets.sphereDiameter;
+          presentationSettings.assets.maxDistanceFromCenter = settingDefaults.assets.sphereDiameter / 2;
         }
         if (!key || key === "collisions.viewport.enabled") {
           presentationSettings.collisions.viewport.enabled = settingDefaults.collisions.viewport.enabled;
@@ -634,7 +669,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       function renderSphereSettings() {
         if (!frontAssetsList || !backAssetsList || !assetPicker || !sphereSizeReadout) return;
         sphereSizeReadout.textContent =
-          `Sphere range: ${minAssetDistance().toFixed(1)} – ${maxAssetDistance().toFixed(1)} from image center`;
+          `Diameter ${presentationSettings.assets.sphereDiameter.toFixed(1)} · radius ${maxAssetDistance().toFixed(1)} each side`;
+        if (sphereDiameterInput && document.activeElement !== sphereDiameterInput) {
+          sphereDiameterInput.value = presentationSettings.assets.sphereDiameter.toFixed(1);
+        }
 
         frontAssetsList.replaceChildren();
         backAssetsList.replaceChildren();
@@ -682,6 +720,14 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         window.webrevPresentationSettings?.setAssetHemisphere(name, "front");
         window.webrevPresentationSettings?.setAssetVisible(name, true);
         assetPicker.value = "";
+      });
+      sphereDiameterInput?.addEventListener("change", () => {
+        const value = Number(sphereDiameterInput.value);
+        if (!Number.isFinite(value)) {
+          sphereDiameterInput.value = presentationSettings.assets.sphereDiameter.toFixed(1);
+          return;
+        }
+        window.webrevPresentationSettings?.set("assets.sphereDiameter", value);
       });
       window.addEventListener("webrev:presentation-settings", renderSphereSettings);
       window.addEventListener("webrev:asset-placement", () => {
@@ -1671,6 +1717,38 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     width:32px;
     height:32px;
     font-size:22px;
+  }
+
+  .sphere-diameter-control {
+    display:grid;
+    gap:6px;
+    margin-bottom:16px;
+    color:rgba(255,255,255,.7);
+    font-size:12px;
+  }
+
+  .sphere-diameter-row {
+    display:grid;
+    grid-template-columns:110px minmax(0,1fr);
+    align-items:center;
+    gap:10px;
+  }
+
+  .sphere-diameter-row input {
+    min-width:0;
+    min-height:38px;
+    box-sizing:border-box;
+    border:1px solid rgba(255,255,255,.16);
+    border-radius:9px;
+    background:#15191f;
+    color:#fff;
+    padding:0 10px;
+    font:inherit;
+  }
+
+  .sphere-diameter-note {
+    color:rgba(255,255,255,.48);
+    font-size:11px;
   }
 
   .sphere-asset-add {
