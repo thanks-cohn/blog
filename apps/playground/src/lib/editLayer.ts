@@ -43,7 +43,10 @@ export function hemispherePresetDirection(
   const z = hemisphere === "back" ? -1 : 1;
 
   if (preset === "side") {
-    return normalize({ x: 1, y: 0.04, z: 0.2 * z });
+    // Intentionally oblique rather than a mathematically pure side view:
+    // keep most of the active hemisphere readable while retaining the image
+    // as a visible spatial reference in the viewport.
+    return normalize({ x: 1, y: 0.05, z: 0.52 * z });
   }
   if (preset === "bottom-corner-up") {
     return normalize({ x: 0.62, y: -0.62, z: 0.58 * z });
@@ -91,7 +94,9 @@ export function lookAnglesAt(target: Vec3, camera: Vec3) {
   });
 
   return {
-    yaw: Math.atan2(-forward.x, -forward.z),
+    // cameraSpace() looks down local -Z. This sign convention keeps the
+    // requested target in front of the camera even at strong side angles.
+    yaw: Math.atan2(forward.x, -forward.z),
     pitch: Math.asin(Math.max(-1, Math.min(1, forward.y)))
   };
 }
