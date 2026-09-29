@@ -72,6 +72,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     phase: number;
     image?: HTMLImageElement;
     action?: AssetAction;
+    depthLayer?: "near" | "middle" | "far";
+    hideBehindImage?: boolean;
     lastScreen?: { x: number; y: number; radius: number; depth: number };
   };
 
@@ -86,6 +88,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   let gltfLoader: any = null;
   const threeObjects = new Map<string, any>();
   const threeLoading = new Set<string>();
+  const occluders = new Map<number, any>();
 
   async function ensureThree() {
     if (threeRenderer || !(glbCanvas instanceof HTMLCanvasElement)) return;
@@ -143,6 +146,29 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       }
     );
   }
+
+  function ensureImageOccluder(stationIndex: number, center: Vec3) {
+    if (!threeModule || !threeScene) return null;
+    let mesh = occluders.get(stationIndex);
+    if (!mesh) {
+      const geometry = new threeModule.PlaneGeometry(5.4, 5.9);
+      const material = new threeModule.MeshBasicMaterial({
+        colorWrite: false,
+        depthWrite: true,
+        depthTest: true,
+        side: threeModule.DoubleSide
+      });
+      mesh = new threeModule.Mesh(geometry, material);
+      mesh.renderOrder = -1000;
+      threeScene.add(mesh);
+      occluders.set(stationIndex, mesh);
+    }
+    mesh.position.set(center.x, center.y - 0.08, center.z + 0.02);
+    mesh.rotation.set(0, 0, 0);
+    mesh.visible = true;
+    return mesh;
+  }
+
 
   if (root && canvas instanceof HTMLCanvasElement) {
     const gameCanvas: HTMLCanvasElement = canvas;
@@ -252,6 +278,26 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         return { x: outer, y: 0, z: 0 };
       }
 
+      function resolve3dSettings(station: any) {
+        const defaults = arrangement.asset3d ?? {};
+        const override = station.asset3d ?? {};
+        const requestedLayer = override.layer ?? defaults.layer ?? "middle";
+        const layer: "near" | "middle" | "far" =
+          requestedLayer === "near" || requestedLayer === "far" ? requestedLayer : "middle";
+        return {
+          layer,
+          hideBehindImage: Boolean(override.hideBehindImage ?? defaults.hideBehindImage ?? true)
+        };
+      }
+
+      function applyDepthLayer(position: Vec3, layer: "near" | "middle" | "far"): Vec3 {
+        // Camera sits in front of each station along +Z, so positive local Z is nearer.
+        if (layer === "near") position.z = Math.abs(position.z) * 0.35 + sphereRadius * 0.34;
+        else if (layer === "far") position.z = -Math.abs(position.z) * 0.45 - sphereRadius * 0.34;
+        else position.z *= 0.3;
+        return position;
+      }
+
       function generateLayout(station: any, index: number): SceneObject[] {
         const rand = rngFor(station, index);
         const discovered = Array.isArray(assetsByArtwork[station.artworkName])
@@ -276,6 +322,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           ...Array.from({ length: extraProxyCount }, () => ({ asset: undefined }))
         ];
         const result: SceneObject[] = [];
+        const threeSettings = resolve3dSettings(station);
 
         for (let i = 0; i < sceneItems.length; i++) {
           const asset = sceneItems[i].asset;
@@ -285,14 +332,18 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             name: asset?.name ?? `${station.artworkName}-proxy-${i + 1}`,
             kind,
             url: asset?.url,
-            local: randomPlacement(rand),
+            local: kind === "3d"
+              ? applyDepthLayer(randomPlacement(rand), threeSettings.layer)
+              : randomPlacement(rand),
             velocity: { x: 0, y: 0, z: 0 },
             size: 0.42 + rand() * 0.7,
             shape: Math.floor(rand() * 4),
             spin: rand() * Math.PI * 2,
             spinVelocity: (rand() - 0.5) * 0.28,
             phase: rand() * Math.PI * 2,
-            action: asset ? assetActions[asset.name] : undefined
+            action: asset ? assetActions[asset.name] : undefined,
+            depthLayer: kind === "3d" ? threeSettings.layer : undefined,
+            hideBehindImage: kind === "3d" ? threeSettings.hideBehindImage : undefined
           };
 
           if (kind === "2d" && asset?.url) {
@@ -591,6 +642,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (!cp || cp.depth > 54) return;
 
         const alpha = Math.max(.12, Math.min(1, 1 - cp.depth / 60));
+        const station3dSettings = resolve3dSettings(station);
+        if (station3dSettings.hideBehindImage) ensureImageOccluder(index, center);
         for (const obj of layouts[index]) drawSceneObject(center, obj, alpha * .84, now);
 
         const colors = themeColors(station.theme);
@@ -748,6 +801,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
         lastPaperRect = null;
         for (const model of threeObjects.values()) model.visible = false;
+        for (const occluder of occluders.values()) occluder.visible = false;
         for (const layout of layouts) {
           for (const obj of layout) obj.lastScreen = undefined;
         }
