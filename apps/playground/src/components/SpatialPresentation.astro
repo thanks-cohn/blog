@@ -85,7 +85,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     | "camera.mode"
     | "camera.mouseMovesCamera"
     | "assets.minDistanceFromCenter"
-    | "assets.maxDistanceFromCenter";
+    | "assets.maxDistanceFromCenter"
+    | "collisions.viewport.enabled"
+    | "collisions.viewport.restitution"
+    | "collisions.viewport.paddingPx"
+    | "collisions.sphereInside.enabled";
   type PresentationSettingValue = boolean | number | CameraMode;
   type PresentationSettingsSnapshot = {
     camera: {
@@ -95,6 +99,16 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     assets: {
       minDistanceFromCenter: number;
       maxDistanceFromCenter: number;
+    };
+    collisions: {
+      viewport: {
+        enabled: boolean;
+        restitution: number;
+        paddingPx: number;
+      };
+      sphereInside: {
+        enabled: boolean;
+      };
     };
   };
   type SettingsListener = (settings: PresentationSettingsSnapshot) => void;
@@ -232,6 +246,16 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       assets: {
         minDistanceFromCenter: defaultMinDistance,
         maxDistanceFromCenter: defaultMaxDistance
+      },
+      collisions: {
+        viewport: {
+          enabled: Boolean(config.arrangement?.collisions?.viewport?.enabled ?? true),
+          restitution: Math.max(0, Math.min(1, Number(config.arrangement?.collisions?.viewport?.restitution ?? 0.72))),
+          paddingPx: Math.max(0, Number(config.arrangement?.collisions?.viewport?.paddingPx ?? 18))
+        },
+        sphereInside: {
+          enabled: Boolean(config.arrangement?.collisions?.sphereInside?.enabled ?? false)
+        }
       }
     };
     const settingsListeners = new Set<SettingsListener>();
@@ -245,6 +269,16 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         assets: {
           minDistanceFromCenter: Number(source.assets.minDistanceFromCenter),
           maxDistanceFromCenter: Number(source.assets.maxDistanceFromCenter)
+        },
+        collisions: {
+          viewport: {
+            enabled: Boolean(source.collisions.viewport.enabled),
+            restitution: Number(source.collisions.viewport.restitution),
+            paddingPx: Number(source.collisions.viewport.paddingPx)
+          },
+          sphereInside: {
+            enabled: Boolean(source.collisions.sphereInside.enabled)
+          }
         }
       };
     }
@@ -276,6 +310,26 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           assets: {
             minDistanceFromCenter: minDistance,
             maxDistanceFromCenter: maxDistance
+          },
+          collisions: {
+            viewport: {
+              enabled:
+                typeof parsed?.collisions?.viewport?.enabled === "boolean"
+                  ? parsed.collisions.viewport.enabled
+                  : settingDefaults.collisions.viewport.enabled,
+              restitution: Number.isFinite(Number(parsed?.collisions?.viewport?.restitution))
+                ? Math.max(0, Math.min(1, Number(parsed.collisions.viewport.restitution)))
+                : settingDefaults.collisions.viewport.restitution,
+              paddingPx: Number.isFinite(Number(parsed?.collisions?.viewport?.paddingPx))
+                ? Math.max(0, Number(parsed.collisions.viewport.paddingPx))
+                : settingDefaults.collisions.viewport.paddingPx
+            },
+            sphereInside: {
+              enabled:
+                typeof parsed?.collisions?.sphereInside?.enabled === "boolean"
+                  ? parsed.collisions.sphereInside.enabled
+                  : settingDefaults.collisions.sphereInside.enabled
+            }
           }
         };
       } catch {
@@ -301,6 +355,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (key === "camera.mouseMovesCamera") return presentationSettings.camera.mouseMovesCamera;
         if (key === "assets.minDistanceFromCenter") return presentationSettings.assets.minDistanceFromCenter;
         if (key === "assets.maxDistanceFromCenter") return presentationSettings.assets.maxDistanceFromCenter;
+        if (key === "collisions.viewport.enabled") return presentationSettings.collisions.viewport.enabled;
+        if (key === "collisions.viewport.restitution") return presentationSettings.collisions.viewport.restitution;
+        if (key === "collisions.viewport.paddingPx") return presentationSettings.collisions.viewport.paddingPx;
+        if (key === "collisions.sphereInside.enabled") return presentationSettings.collisions.sphereInside.enabled;
         return cloneSettings(presentationSettings);
       },
       set(key: PresentationSettingKey, value: PresentationSettingValue) {
@@ -323,6 +381,14 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             next,
             presentationSettings.assets.minDistanceFromCenter
           );
+        } else if (key === "collisions.viewport.enabled") {
+          presentationSettings.collisions.viewport.enabled = Boolean(value);
+        } else if (key === "collisions.viewport.restitution") {
+          presentationSettings.collisions.viewport.restitution = Math.max(0, Math.min(1, Number(value) || 0));
+        } else if (key === "collisions.viewport.paddingPx") {
+          presentationSettings.collisions.viewport.paddingPx = Math.max(0, Number(value) || 0);
+        } else if (key === "collisions.sphereInside.enabled") {
+          presentationSettings.collisions.sphereInside.enabled = Boolean(value);
         }
         return publishSettings();
       },
@@ -341,6 +407,18 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         }
         if (!key || key === "assets.maxDistanceFromCenter") {
           presentationSettings.assets.maxDistanceFromCenter = settingDefaults.assets.maxDistanceFromCenter;
+        }
+        if (!key || key === "collisions.viewport.enabled") {
+          presentationSettings.collisions.viewport.enabled = settingDefaults.collisions.viewport.enabled;
+        }
+        if (!key || key === "collisions.viewport.restitution") {
+          presentationSettings.collisions.viewport.restitution = settingDefaults.collisions.viewport.restitution;
+        }
+        if (!key || key === "collisions.viewport.paddingPx") {
+          presentationSettings.collisions.viewport.paddingPx = settingDefaults.collisions.viewport.paddingPx;
+        }
+        if (!key || key === "collisions.sphereInside.enabled") {
+          presentationSettings.collisions.sphereInside.enabled = settingDefaults.collisions.sphereInside.enabled;
         }
         return publishSettings();
       },
@@ -713,12 +791,52 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         }
       }
 
+      function constrainToViewport(center: Vec3, obj: SceneObject) {
+        if (!presentationSettings.collisions.viewport.enabled) return;
+
+        const projected = project({
+          x: center.x + obj.local.x,
+          y: center.y + obj.local.y,
+          z: center.z + obj.local.z
+        });
+        if (!projected) return;
+
+        const radius = Math.max(8, obj.size * projected.scale);
+        const pad = presentationSettings.collisions.viewport.paddingPx;
+        const minX = pad + radius;
+        const maxX = width - pad - radius;
+        const minY = pad + radius;
+        const maxY = height - pad - radius;
+        const restitution = presentationSettings.collisions.viewport.restitution;
+
+        let correctionX = 0;
+        let correctionY = 0;
+
+        if (projected.x < minX) correctionX = minX - projected.x;
+        else if (projected.x > maxX) correctionX = maxX - projected.x;
+
+        if (projected.y < minY) correctionY = minY - projected.y;
+        else if (projected.y > maxY) correctionY = maxY - projected.y;
+
+        if (correctionX === 0 && correctionY === 0) return;
+
+        // Convert screen-space correction back into local world-space at this depth.
+        const worldPerPixel = 1 / Math.max(projected.scale, 0.0001);
+        obj.local.x += correctionX * worldPerPixel;
+        obj.local.y -= correctionY * worldPerPixel;
+
+        if (correctionX !== 0) obj.velocity.x *= -restitution;
+        if (correctionY !== 0) obj.velocity.y *= -restitution;
+      }
+
       function updateObjects(now: number, dt: number) {
         const damping = Math.pow(Number(motion.tossDamping) || 0.992, dt * 60);
         const floatStrength = Number(motion.floatStrength) || 0.08;
         const floatSpeed = Number(motion.floatSpeed) || 0.22;
 
-        for (const layout of layouts) {
+        for (let stationIndex = 0; stationIndex < layouts.length; stationIndex++) {
+          const layout = layouts[stationIndex];
+          const center = stationCenter(stationIndex);
           for (const obj of layout) {
             if (grabbed?.object === obj) continue;
             obj.velocity.x *= damping;
@@ -734,7 +852,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             obj.local.z += obj.velocity.z * dt;
 
             if (obj.kind === "3d") obj.spin += obj.spinVelocity * dt;
-            constrainToSphere(obj);
+            if (presentationSettings.collisions.sphereInside.enabled) {
+              constrainToSphere(obj);
+            }
+            constrainToViewport(center, obj);
           }
         }
       }
@@ -1103,7 +1224,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           obj.velocity.x = Math.max(-maxToss, Math.min(maxToss, (dx / dt) * 0.0025));
           obj.velocity.y = Math.max(-maxToss, Math.min(maxToss, (-dy / dt) * 0.0025));
           draggedDistance += Math.hypot(dx, dy);
-          constrainToSphere(obj);
+          if (presentationSettings.collisions.sphereInside.enabled) {
+            constrainToSphere(obj);
+          }
+          constrainToViewport(stationCenter(grabbed.stationIndex), obj);
 
           dragLastX = x;
           dragLastY = y;
