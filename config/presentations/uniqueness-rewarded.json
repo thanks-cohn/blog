@@ -94,6 +94,12 @@
     },
     "interaction": {
       "contextMenuMode": "experience"
+    },
+    "focusAudio": {
+      "enabled": true,
+      "track": "",
+      "volume": 0.78,
+      "fadeInMs": 1100
     }
   },
   "stations": [
