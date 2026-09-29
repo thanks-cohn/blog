@@ -113,6 +113,12 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     type EditLayerState,
     type HemisphereCameraPreset
   } from "../lib/editLayer";
+  import {
+    normalizeSpatialEnvelopeConfig,
+    resolveSphereCollision,
+    spatialEnvelopeRadius,
+    type SpatialEnvelopeConfig
+  } from "../lib/spatialEnvelope";
 
   type Vec3 = { x: number; y: number; z: number };
   type Projected = { x: number; y: number; depth: number; scale: number };
@@ -249,6 +255,9 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         setAssetVisible(name: string, visible: boolean): void;
         getAssetMotion(name: string): ObjectMotion | null;
         setAssetMotion(name: string, motion: ObjectMotion): void;
+        getSpatialEnvelope(name: string): SpatialEnvelopeConfig | null;
+        setSpatialEnvelope(name: string, patch: Partial<SpatialEnvelopeConfig>): void;
+        setEnvelopeDebug(name: string, visible: boolean): void;
         setGlbDebugGlobe(enabled: boolean, objectName?: string): void;
         getAssetRuntimeStatus(name: string): { status: GlbRuntimeStatus; attempts: number; lastError?: string } | null;
         getEditorState(): EditLayerState;
@@ -286,6 +295,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   const glbRuntimeError = new Map<string, string>();
   const occluders = new Map<number, any>();
   const debugGlobes = new Map<string, any>();
+  const envelopeDebugGlobes = new Map<string, any>();
   const imagePlanes = new Map<string, { group: any; mesh: any; texture: any; signature: string }>();
   const textPlanes = new Map<string, { mesh: any; texture: any; signature: string }>();
 
@@ -462,6 +472,29 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     return globe;
   }
 
+  function ensureEnvelopeDebugGlobe(obj: SceneObject, opacity: number) {
+    if (!threeScene) return null;
+    const T3: any = THREE;
+    let globe: any = envelopeDebugGlobes.get(obj.id);
+    if (!globe) {
+      const geometry: any = new T3.SphereGeometry(1, 24, 16);
+      const material: any = new T3.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity,
+        wireframe: true,
+        depthTest: false
+      });
+      globe = new T3.Mesh(geometry, material);
+      globe.renderOrder = 10001;
+      globe.visible = false;
+      threeScene.add(globe);
+      envelopeDebugGlobes.set(obj.id, globe);
+    }
+    globe.material.opacity = opacity;
+    return globe;
+  }
+
   if (root && canvas instanceof HTMLCanvasElement) {
     const gameCanvas: HTMLCanvasElement = canvas;
     const config = JSON.parse(root.dataset.config ?? "{}");
@@ -469,6 +502,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     const legacySettingsStorageKey = "webrev:spatial-settings:v2";
     const assetPlacementStorageKey = "webrev:asset-placement:v2";
     const assetMotionStorageKey = "webrev:asset-motion:v1";
+    const spatialEnvelopeStorageKey = "webrev:spatial-envelope:v1";
     const stationDefinitions = Array.isArray(config.stations) ? config.stations : [];
     for (const station of stationDefinitions) {
       const assets = Array.isArray(config.assetsByArtwork?.[station.artworkName])
@@ -544,6 +578,48 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         window.localStorage.setItem(assetMotionStorageKey, JSON.stringify(assetMotionState));
       } catch {}
       window.dispatchEvent(new CustomEvent("webrev:asset-motion", { detail: assetMotionState }));
+    }
+
+    function defaultEnvelopeResponseFor(name: string) {
+      const motion = assetMotionState[name] ?? configuredMotionFor(name);
+      return motion.type === "fixed" ? "immovable" : "dynamic";
+    }
+
+    function configuredEnvelopeFor(name: string) {
+      return normalizeSpatialEnvelopeConfig(
+        config.assetEnvelope?.[name],
+        defaultEnvelopeResponseFor(name)
+      );
+    }
+
+    function loadSpatialEnvelopeState() {
+      let stored: Record<string, unknown> = {};
+      try {
+        stored = JSON.parse(window.localStorage.getItem(spatialEnvelopeStorageKey) ?? "{}");
+      } catch {}
+
+      const state: Record<string, SpatialEnvelopeConfig> = {};
+      for (const asset of allSceneAssetNames()) {
+        state[asset.name] = normalizeSpatialEnvelopeConfig(
+          stored?.[asset.name] ?? config.assetEnvelope?.[asset.name],
+          defaultEnvelopeResponseFor(asset.name)
+        );
+      }
+      return state;
+    }
+
+    let spatialEnvelopeState = loadSpatialEnvelopeState();
+
+    function saveSpatialEnvelopeState() {
+      try {
+        window.localStorage.setItem(
+          spatialEnvelopeStorageKey,
+          JSON.stringify(spatialEnvelopeState)
+        );
+      } catch {}
+      window.dispatchEvent(new CustomEvent("webrev:spatial-envelope", {
+        detail: spatialEnvelopeState
+      }));
     }
 
     function loadAssetPlacement(): AssetPlacementState {
@@ -1210,6 +1286,43 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         assetMotionState[name] = normalizeObjectMotion(motion);
         saveAssetMotionState();
       },
+      getSpatialEnvelope(name: string) {
+        if (!allSceneAssetNames().some((asset) => asset.name === name)) return null;
+        return {
+          ...spatialEnvelopeState[name],
+          collision: { ...spatialEnvelopeState[name].collision },
+          debug: { ...spatialEnvelopeState[name].debug }
+        };
+      },
+      setSpatialEnvelope(name: string, patch: Partial<SpatialEnvelopeConfig>) {
+        if (!allSceneAssetNames().some((asset) => asset.name === name)) return;
+        const current = spatialEnvelopeState[name] ?? configuredEnvelopeFor(name);
+        spatialEnvelopeState[name] = normalizeSpatialEnvelopeConfig(
+          {
+            ...current,
+            ...patch,
+            collision: {
+              ...current.collision,
+              ...(patch as any)?.collision
+            },
+            debug: {
+              ...current.debug,
+              ...(patch as any)?.debug
+            }
+          },
+          defaultEnvelopeResponseFor(name)
+        );
+        saveSpatialEnvelopeState();
+      },
+      setEnvelopeDebug(name: string, visible: boolean) {
+        if (!allSceneAssetNames().some((asset) => asset.name === name)) return;
+        const current = spatialEnvelopeState[name] ?? configuredEnvelopeFor(name);
+        spatialEnvelopeState[name] = {
+          ...current,
+          debug: { ...current.debug, visible: Boolean(visible) }
+        };
+        saveSpatialEnvelopeState();
+      },
       setGlbDebugGlobe(enabled: boolean, objectName?: string) {
         presentationSettings.debug.glbGlobe.enabled = Boolean(enabled);
         if (typeof objectName === "string") {
@@ -1293,11 +1406,26 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         return presentationSettings.sphere.radius;
       }
 
-      function objectBodyRadius(obj: SceneObject) {
+      function visualBoundsRadius(obj: SceneObject) {
         if (obj.kind === "3d" && Number.isFinite(obj.modelRadius)) {
           return Math.max(0.02, Number(obj.modelRadius) * obj.size);
         }
         return Math.max(0.02, obj.size);
+      }
+
+      function spatialEnvelopeConfigFor(obj: SceneObject) {
+        return spatialEnvelopeState[obj.name] ??
+          normalizeSpatialEnvelopeConfig(
+            config.assetEnvelope?.[obj.name],
+            obj.motion.type === "fixed" ? "immovable" : "dynamic"
+          );
+      }
+
+      function objectBodyRadius(obj: SceneObject) {
+        return spatialEnvelopeRadius(
+          visualBoundsRadius(obj),
+          spatialEnvelopeConfigFor(obj)
+        );
       }
 
 
@@ -2391,6 +2519,68 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         }
       }
 
+      function resolveEnvelopeCollisions(stationIndex: number) {
+        const layout = layouts[stationIndex].filter(
+          (obj: SceneObject) => obj.visible !== false
+        );
+
+        // Broad phase is intentionally simple while station counts are small.
+        // The envelope API is independent of this strategy, so we can swap this
+        // for a spatial hash later without changing callers.
+        for (let i = 0; i < layout.length; i++) {
+          const a = layout[i];
+          const configA = spatialEnvelopeConfigFor(a);
+          if (!configA.collision.enabled) continue;
+
+          for (let j = i + 1; j < layout.length; j++) {
+            const b = layout[j];
+            const configB = spatialEnvelopeConfigFor(b);
+            if (!configB.collision.enabled) continue;
+
+            // Objects in opposite hemispheres are already separated by the image plane.
+            if (a.hemisphere !== b.hemisphere) continue;
+
+            const radiusA = objectBodyRadius(a);
+            const radiusB = objectBodyRadius(b);
+            const responseA =
+              a.motion.type === "fixed" && configA.collision.response === "dynamic"
+                ? "immovable"
+                : configA.collision.response;
+            const responseB =
+              b.motion.type === "fixed" && configB.collision.response === "dynamic"
+                ? "immovable"
+                : configB.collision.response;
+
+            const result = resolveSphereCollision(
+              {
+                position: a.local,
+                velocity: a.velocity,
+                radius: radiusA,
+                mass: configA.collision.mass,
+                response: responseA
+              },
+              {
+                position: b.local,
+                velocity: b.velocity,
+                radius: radiusB,
+                mass: configB.collision.mass,
+                response: responseB
+              },
+              Math.min(configA.collision.restitution, configB.collision.restitution)
+            );
+            if (!result.collided) continue;
+
+            a.local = { ...result.a.position };
+            a.velocity = { ...result.a.velocity };
+            b.local = { ...result.b.position };
+            b.velocity = { ...result.b.velocity };
+
+            solveObjectBounds(stationIndex, a);
+            solveObjectBounds(stationIndex, b);
+          }
+        }
+      }
+
       function updateObjects(now: number, dt: number) {
         const damping = Math.pow(Number(motion.tossDamping) || 0.992, dt * 60);
         const floatStrength = Number(motion.floatStrength) || 0.08;
@@ -2430,6 +2620,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             if (obj.kind === "3d") obj.spin += obj.spinVelocity * dt;
             solveObjectBounds(stationIndex, obj);
           }
+          resolveEnvelopeCollisions(stationIndex);
         }
       }
 
@@ -2486,6 +2677,19 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             model.position.set(world.x, world.y, world.z);
             model.rotation.set(0, obj.spin, 0);
             model.scale.setScalar(obj.size);
+          }
+
+          const envelopeConfig = spatialEnvelopeConfigFor(obj);
+          if (envelopeConfig.debug.visible) {
+            const envelopeGlobe = ensureEnvelopeDebugGlobe(
+              obj,
+              envelopeConfig.debug.opacity
+            );
+            if (envelopeGlobe) {
+              envelopeGlobe.visible = true;
+              envelopeGlobe.position.set(world.x, world.y, world.z);
+              envelopeGlobe.scale.setScalar(objectBodyRadius(obj));
+            }
           }
 
           if (
@@ -2785,6 +2989,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         for (const entry of imagePlanes.values()) entry.group.visible = false;
         for (const entry of textPlanes.values()) entry.mesh.visible = false;
         for (const globe of debugGlobes.values()) globe.visible = false;
+        for (const globe of envelopeDebugGlobes.values()) globe.visible = false;
         for (const occluder of occluders.values()) occluder.visible = false;
         for (const layout of layouts) {
           for (const obj of layout) obj.lastScreen = undefined;
