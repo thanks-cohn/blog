@@ -2430,23 +2430,22 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const colors = themeColors(station.theme);
         const scale = cp.scale;
         const current = index === arrivingAt;
-        const lift = current ? paperOpen * 0.85 * scale : 0;
+        const lift = 0;
 
         const imageW = 5.4 * scale;
         const imageH = 5.9 * scale;
         const imageX = cp.x - imageW * .5;
         const imageY = cp.y - imageH * .5 - lift;
 
-        const sidePerspective =
+        const editPerspective =
           current &&
           presentationSettings.editor.mode === "hemisphere" &&
-          presentationSettings.editor.cameraPreset === "side" &&
           drawSidePerspectiveImage(station, center, alpha);
 
         ctx.save();
         ctx.globalAlpha = alpha;
 
-        if (!sidePerspective) {
+        if (!editPerspective) {
           ctx.fillStyle = "#141414";
           ctx.fillRect(imageX - 10, imageY - 10, imageW + 20, imageH + 20);
 
