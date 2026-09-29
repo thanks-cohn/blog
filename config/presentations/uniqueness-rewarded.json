@@ -54,7 +54,9 @@
       "tossDamping": 0.992,
       "boundaryRestitution": 0.5,
       "maxTossSpeed": 2.6
-    }
+    },
+    "assetDisplayMode": "assets-only",
+    "proxyCount": 12
   },
   "stations": [
     {
