@@ -385,9 +385,17 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
       function applyDepthLayer(position: Vec3, layer: "near" | "middle" | "far"): Vec3 {
         // Camera sits in front of each station along +Z, so positive local Z is nearer.
-        if (layer === "near") position.z = Math.abs(position.z) * 0.35 + sphereRadius * 0.34;
-        else if (layer === "far") position.z = -Math.abs(position.z) * 0.45 - sphereRadius * 0.34;
-        else position.z *= 0.3;
+        // Near assets must stay inside a tighter screen-visible envelope because
+        // perspective magnifies their x/y offsets substantially.
+        if (layer === "near") {
+          position.x *= 0.5;
+          position.y *= 0.5;
+          position.z = Math.abs(position.z) * 0.24 + sphereRadius * 0.30;
+        } else if (layer === "far") {
+          position.z = -Math.abs(position.z) * 0.45 - sphereRadius * 0.34;
+        } else {
+          position.z *= 0.3;
+        }
         return position;
       }
 
