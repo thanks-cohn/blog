@@ -35,6 +35,16 @@ const discovered3d = import.meta.glob("../assets/3d-assets/*.{glb,gltf}", {
   import: "default"
 }) as Record<string, string>;
 
+const discoveredMusic = import.meta.glob("../assets/music/*.{mp3,wav,ogg,m4a,aac,flac}", {
+  eager: true,
+  query: "?url",
+  import: "default"
+}) as Record<string, string>;
+
+const musicTracks = Object.entries(discoveredMusic)
+  .map(([path, url]) => ({ name: path.split("/").pop() ?? path, url }))
+  .sort((a, b) => a.name.localeCompare(b.name));
+
 const assetsByArtwork: Record<string, DiscoveredAsset[]> = {};
 
 function registerAsset(path: string, url: string, kind: "2d" | "3d") {
@@ -49,7 +59,7 @@ function registerAsset(path: string, url: string, kind: "2d" | "3d") {
 for (const [path, url] of Object.entries(discovered2d)) registerAsset(path, url, "2d");
 for (const [path, url] of Object.entries(discovered3d)) registerAsset(path, url, "3d");
 
-const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resolvedLinks: links };
+const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, musicTracks, resolvedLinks: links };
 ---
 
 <div
@@ -189,6 +199,10 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
     | "viewport.paddingPx"
     | "initialPlacement.keepViewerImageSightlineClear"
     | "interaction.contextMenuMode"
+    | "focusAudio.enabled"
+    | "focusAudio.track"
+    | "focusAudio.volume"
+    | "focusAudio.fadeInMs"
     | "debug.glbGlobe.enabled"
     | "debug.glbGlobe.objectName"
     | "editor.mode"
@@ -231,6 +245,12 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
     interaction: {
       contextMenuMode: "experience" | "edit";
     };
+    focusAudio: {
+      enabled: boolean;
+      track: string;
+      volume: number;
+      fadeInMs: number;
+    };
     debug: {
       glbGlobe: {
         enabled: boolean;
@@ -258,7 +278,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
   type SettingDescriptor = {
     key: PresentationSettingKey;
     label: string;
-    group: "sphere" | "camera" | "viewport" | "initialPlacement" | "interaction" | "debug" | "editor" | "textPlane";
+    group: "sphere" | "camera" | "viewport" | "initialPlacement" | "interaction" | "focusAudio" | "debug" | "editor" | "textPlane";
     control: "number" | "select" | "toggle" | "color";
     description?: string;
     min?: number;
@@ -746,6 +766,30 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
                 ? "edit"
                 : "experience"
         },
+        focusAudio: {
+          enabled:
+            typeof station?.focusAudio?.enabled === "boolean"
+              ? station.focusAudio.enabled
+              : typeof config.arrangement?.focusAudio?.enabled === "boolean"
+                ? config.arrangement.focusAudio.enabled
+                : true,
+          track: String(
+            station?.focusAudio?.track ??
+            config.arrangement?.focusAudio?.track ??
+            ""
+          ),
+          volume: Math.max(
+            0,
+            Math.min(
+              1,
+              Number(station?.focusAudio?.volume ?? config.arrangement?.focusAudio?.volume ?? 0.78)
+            )
+          ),
+          fadeInMs: Math.max(
+            0,
+            Number(station?.focusAudio?.fadeInMs ?? config.arrangement?.focusAudio?.fadeInMs ?? 1100)
+          )
+        },
         debug: {
           glbGlobe: {
             enabled: Boolean(station?.debug?.glbGlobe?.enabled ?? config.arrangement?.debug?.glbGlobe?.enabled ?? false),
@@ -795,6 +839,12 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         },
         interaction: {
           contextMenuMode: source.interaction.contextMenuMode === "edit" ? "edit" : "experience"
+        },
+        focusAudio: {
+          enabled: Boolean(source.focusAudio.enabled),
+          track: String(source.focusAudio.track ?? ""),
+          volume: Math.max(0, Math.min(1, Number(source.focusAudio.volume))),
+          fadeInMs: Math.max(0, Number(source.focusAudio.fadeInMs))
         },
         debug: {
           glbGlobe: {
@@ -885,6 +935,22 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
               : raw?.interaction?.contextMenuMode === "experience"
                 ? "experience"
                 : defaults.interaction.contextMenuMode
+        },
+        focusAudio: {
+          enabled:
+            typeof raw?.focusAudio?.enabled === "boolean"
+              ? raw.focusAudio.enabled
+              : defaults.focusAudio.enabled,
+          track:
+            typeof raw?.focusAudio?.track === "string"
+              ? raw.focusAudio.track
+              : defaults.focusAudio.track,
+          volume: Number.isFinite(Number(raw?.focusAudio?.volume))
+            ? Math.max(0, Math.min(1, Number(raw.focusAudio.volume)))
+            : defaults.focusAudio.volume,
+          fadeInMs: Number.isFinite(Number(raw?.focusAudio?.fadeInMs))
+            ? Math.max(0, Number(raw.focusAudio.fadeInMs))
+            : defaults.focusAudio.fadeInMs
         },
         debug: {
           glbGlobe: {
@@ -996,6 +1062,12 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
     }
 
     function describeSettingsForStation(stationId = activeStationId): SettingDescriptor[] {
+      const musicOptions: SettingOption[] = [
+        { value: "", label: config.musicTracks?.length ? "Choose a song…" : "No music in assets/music yet" },
+        ...(Array.isArray(config.musicTracks)
+          ? config.musicTracks.map((track: any) => ({ value: String(track.name), label: String(track.name) }))
+          : [])
+      ];
       const glbOptions: SettingOption[] = [
         { value: "", label: "Choose GLB…" },
         ...allSceneAssetNames()
@@ -1075,6 +1147,40 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
             { value: "experience", label: "Come Into Our World" },
             { value: "edit", label: "Edit tools" }
           ]
+        },
+        {
+          key: "focusAudio.enabled",
+          label: "Play focus song",
+          group: "focusAudio",
+          control: "toggle",
+          description: "Starts the selected song when Come Into Our World settles."
+        },
+        {
+          key: "focusAudio.track",
+          label: "Focus song",
+          group: "focusAudio",
+          control: "select",
+          description: "Songs are discovered automatically from assets/music.",
+          options: musicOptions
+        },
+        {
+          key: "focusAudio.volume",
+          label: "Song volume",
+          group: "focusAudio",
+          control: "number",
+          min: 0,
+          max: 1,
+          step: 0.05
+        },
+        {
+          key: "focusAudio.fadeInMs",
+          label: "Fade-in",
+          group: "focusAudio",
+          control: "number",
+          min: 0,
+          max: 10000,
+          step: 100,
+          description: "Milliseconds from silence to the selected volume after the camera settles."
         },
         {
           key: "debug.glbGlobe.enabled",
@@ -1191,6 +1297,10 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         if (key === "viewport.paddingPx") return presentationSettings.viewport.paddingPx;
         if (key === "initialPlacement.keepViewerImageSightlineClear") return presentationSettings.initialPlacement.keepViewerImageSightlineClear;
         if (key === "interaction.contextMenuMode") return presentationSettings.interaction.contextMenuMode;
+        if (key === "focusAudio.enabled") return presentationSettings.focusAudio.enabled;
+        if (key === "focusAudio.track") return presentationSettings.focusAudio.track;
+        if (key === "focusAudio.volume") return presentationSettings.focusAudio.volume;
+        if (key === "focusAudio.fadeInMs") return presentationSettings.focusAudio.fadeInMs;
         if (key === "debug.glbGlobe.enabled") return presentationSettings.debug.glbGlobe.enabled;
         if (key === "debug.glbGlobe.objectName") return presentationSettings.debug.glbGlobe.objectName;
         if (key === "editor.mode") return presentationSettings.editor.mode;
@@ -1242,6 +1352,14 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           presentationSettings.initialPlacement.keepViewerImageSightlineClear = Boolean(value);
         } else if (key === "interaction.contextMenuMode") {
           presentationSettings.interaction.contextMenuMode = value === "edit" ? "edit" : "experience";
+        } else if (key === "focusAudio.enabled") {
+          presentationSettings.focusAudio.enabled = Boolean(value);
+        } else if (key === "focusAudio.track") {
+          presentationSettings.focusAudio.track = String(value ?? "");
+        } else if (key === "focusAudio.volume") {
+          presentationSettings.focusAudio.volume = Math.max(0, Math.min(1, Number(value) || 0));
+        } else if (key === "focusAudio.fadeInMs") {
+          presentationSettings.focusAudio.fadeInMs = Math.max(0, Number(value) || 0);
         } else if (key === "debug.glbGlobe.enabled") {
           presentationSettings.debug.glbGlobe.enabled = Boolean(value);
         } else if (key === "debug.glbGlobe.objectName") {
@@ -1303,6 +1421,10 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         if (key === "sphere.restitution") presentationSettings.sphere.restitution = defaults.sphere.restitution;
         if (key === "viewport.enabled") presentationSettings.viewport.enabled = defaults.viewport.enabled;
         if (key === "viewport.paddingPx") presentationSettings.viewport.paddingPx = defaults.viewport.paddingPx;
+        if (key === "focusAudio.enabled") presentationSettings.focusAudio.enabled = defaults.focusAudio.enabled;
+        if (key === "focusAudio.track") presentationSettings.focusAudio.track = defaults.focusAudio.track;
+        if (key === "focusAudio.volume") presentationSettings.focusAudio.volume = defaults.focusAudio.volume;
+        if (key === "focusAudio.fadeInMs") presentationSettings.focusAudio.fadeInMs = defaults.focusAudio.fadeInMs;
         if (key === "debug.glbGlobe.enabled") presentationSettings.debug.glbGlobe.enabled = defaults.debug.glbGlobe.enabled;
         if (key === "debug.glbGlobe.objectName") presentationSettings.debug.glbGlobe.objectName = defaults.debug.glbGlobe.objectName;
         if (key === "editor.mode" || key === "editor.hemisphere" || key === "editor.cameraPreset" || key === "editor.repositionObjectName") presentationSettings.editor = { mode: "none" };
@@ -1668,6 +1790,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
               descriptor.group === "viewport" ? "Viewport" :
               descriptor.group === "initialPlacement" ? "Initial placement" :
               descriptor.group === "interaction" ? "Interaction" :
+              descriptor.group === "focusAudio" ? "Focus music" :
               descriptor.group === "debug" ? "Debug" :
               descriptor.group === "editor" ? "Edit Layer" :
               "Text plane";
@@ -3201,6 +3324,66 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         return null;
       }
 
+      let focusAudioElement: HTMLAudioElement | null = null;
+      let focusAudioFadeFrame = 0;
+
+      function selectedFocusTrackUrl() {
+        if (!presentationSettings.focusAudio.enabled) return "";
+        const requested = presentationSettings.focusAudio.track;
+        const tracks = Array.isArray(config.musicTracks) ? config.musicTracks : [];
+        const selected = tracks.find((track: any) => track?.name === requested);
+        return typeof selected?.url === "string" ? selected.url : "";
+      }
+
+      function stopFocusAudio() {
+        if (focusAudioFadeFrame) cancelAnimationFrame(focusAudioFadeFrame);
+        focusAudioFadeFrame = 0;
+        if (!focusAudioElement) return;
+        focusAudioElement.pause();
+        focusAudioElement.currentTime = 0;
+        focusAudioElement = null;
+      }
+
+      function primeFocusAudio() {
+        stopFocusAudio();
+        const url = selectedFocusTrackUrl();
+        if (!url) return;
+
+        const audio = new Audio(url);
+        audio.preload = "auto";
+        audio.loop = false;
+        audio.volume = 0;
+        focusAudioElement = audio;
+
+        // Called directly from the visitor's menu click. Begin silently now so
+        // browsers recognize the playback as user-initiated; the audible fade
+        // begins only when the cinematic camera settles.
+        void audio.play().catch(() => {});
+      }
+
+      function fadeInFocusAudio() {
+        const audio = focusAudioElement;
+        if (!audio || !presentationSettings.focusAudio.enabled) return;
+
+        const targetVolume = Math.max(0, Math.min(1, presentationSettings.focusAudio.volume));
+        const duration = Math.max(0, presentationSettings.focusAudio.fadeInMs);
+        const startedAt = performance.now();
+
+        if (duration === 0) {
+          audio.volume = targetVolume;
+          return;
+        }
+
+        const step = (now: number) => {
+          if (focusAudioElement !== audio) return;
+          const t = Math.min(1, (now - startedAt) / duration);
+          audio.volume = targetVolume * t;
+          if (t < 1) focusAudioFadeFrame = requestAnimationFrame(step);
+          else focusAudioFadeFrame = 0;
+        };
+        focusAudioFadeFrame = requestAnimationFrame(step);
+      }
+
       function beginFocusExperience(obj: SceneObject) {
         const stationIndex = arrivingAt;
         const radius = objectBodyRadius(obj);
@@ -3235,6 +3418,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
       }
 
       function endFocusExperience() {
+        stopFocusAudio();
         if (!focusExperience) return;
         const obj = focusExperience.object;
         obj.local = { ...focusExperience.baseLocal };
@@ -3263,6 +3447,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
 
           if (!focusExperience.settled && now - focusExperience.startedAt >= 1450) {
             focusExperience.settled = true;
+            fadeInFocusAudio();
             window.dispatchEvent(new CustomEvent("webrev:focus-experience-settled", {
               detail: {
                 stationId: activeStationId,
@@ -3423,6 +3608,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
       }
 
       function requestFocusExperience(obj: SceneObject) {
+        primeFocusAudio();
         beginFocusExperience(obj);
         window.dispatchEvent(new CustomEvent("webrev:focus-experience-request", {
           detail: {
