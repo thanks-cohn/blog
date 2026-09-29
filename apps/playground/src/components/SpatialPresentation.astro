@@ -50,6 +50,9 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 </div>
 
 <script>
+  import * as THREE from "../vendor/three.module.min.js";
+  import { GLTFLoader } from "../vendor/GLTFLoader.js";
+
   type Vec3 = { x: number; y: number; z: number };
   type Projected = { x: number; y: number; depth: number; scale: number };
   type AssetAction =
@@ -81,40 +84,30 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   const canvas = document.getElementById("prism-rail-canvas");
   const glbCanvas = document.getElementById("glb-layer");
 
-  let threeRenderer: any = null;
-  let threeScene: any = null;
-  let threeCamera: any = null;
-  let threeModule: any = null;
-  let gltfLoader: any = null;
-  const threeObjects = new Map<string, any>();
+  let threeRenderer: THREE.WebGLRenderer | null = null;
+  let threeScene: THREE.Scene | null = null;
+  let threeCamera: THREE.PerspectiveCamera | null = null;
+  let gltfLoader: GLTFLoader | null = null;
+  const threeObjects = new Map<string, THREE.Object3D>();
   const threeLoading = new Set<string>();
-  const occluders = new Map<number, any>();
+  const occluders = new Map<number, THREE.Mesh>();
 
-  async function ensureThree() {
+  function ensureThree() {
     if (threeRenderer || !(glbCanvas instanceof HTMLCanvasElement)) return;
-    try {
-      const threeUrl = "https://esm.sh/three@0.180.0";
-      const loaderUrl = "https://esm.sh/three@0.180.0/examples/jsm/loaders/GLTFLoader.js";
-      const THREE = await import(/* @vite-ignore */ threeUrl);
-      const loaderModule = await import(/* @vite-ignore */ loaderUrl);
-      threeModule = THREE;
-      threeScene = new THREE.Scene();
-      threeCamera = new THREE.PerspectiveCamera(50, 1, 0.05, 250);
-      threeRenderer = new THREE.WebGLRenderer({
-        canvas: glbCanvas,
-        alpha: true,
-        antialias: true
-      });
-      threeRenderer.setClearColor(0x000000, 0);
-      threeRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-      threeScene.add(new THREE.HemisphereLight(0xffffff, 0x30343b, 2.2));
-      const key = new THREE.DirectionalLight(0xffffff, 2.6);
-      key.position.set(5, 8, 6);
-      threeScene.add(key);
-      gltfLoader = new loaderModule.GLTFLoader();
-    } catch (error) {
-      console.error("Unable to initialize GLB renderer", error);
-    }
+    threeScene = new THREE.Scene();
+    threeCamera = new THREE.PerspectiveCamera(50, 1, 0.05, 250);
+    threeRenderer = new THREE.WebGLRenderer({
+      canvas: glbCanvas,
+      alpha: true,
+      antialias: true
+    });
+    threeRenderer.setClearColor(0x000000, 0);
+    threeRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    threeScene.add(new THREE.HemisphereLight(0xffffff, 0x30343b, 2.2));
+    const key = new THREE.DirectionalLight(0xffffff, 2.6);
+    key.position.set(5, 8, 6);
+    threeScene.add(key);
+    gltfLoader = new GLTFLoader();
   }
 
   function ensureThreeObject(obj: SceneObject) {
@@ -123,7 +116,6 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     gltfLoader.load(
       obj.url,
       (gltf: any) => {
-        const THREE = threeModule;
         const root = gltf.scene;
         const box = new THREE.Box3().setFromObject(root);
         const center = box.getCenter(new THREE.Vector3());
@@ -148,17 +140,17 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   }
 
   function ensureImageOccluder(stationIndex: number, center: Vec3) {
-    if (!threeModule || !threeScene) return null;
+    if (!threeScene) return null;
     let mesh = occluders.get(stationIndex);
     if (!mesh) {
-      const geometry = new threeModule.PlaneGeometry(5.4, 5.9);
-      const material = new threeModule.MeshBasicMaterial({
+      const geometry = new THREE.PlaneGeometry(5.4, 5.9);
+      const material = new THREE.MeshBasicMaterial({
         colorWrite: false,
         depthWrite: true,
         depthTest: true,
-        side: threeModule.DoubleSide
+        side: THREE.DoubleSide
       });
-      mesh = new threeModule.Mesh(geometry, material);
+      mesh = new THREE.Mesh(geometry, material);
       mesh.renderOrder = -1000;
       threeScene.add(mesh);
       occluders.set(stationIndex, mesh);
@@ -217,11 +209,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       let draggedDistance = 0;
 
       const layouts = stations.map((station: any, index: number) => generateLayout(station, index));
-      void ensureThree().then(() => {
-        for (const layout of layouts) {
-          for (const obj of layout) ensureThreeObject(obj);
-        }
-      });
+      ensureThree();
+      for (const layout of layouts) {
+        for (const obj of layout) ensureThreeObject(obj);
+      }
 
       function stationZ(index: number) {
         return -18 - index * spacing;
