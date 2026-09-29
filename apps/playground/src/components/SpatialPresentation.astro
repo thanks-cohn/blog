@@ -185,7 +185,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const discovered = Array.isArray(assetsByArtwork[station.artworkName])
           ? assetsByArtwork[station.artworkName]
           : [];
-        const displayMode = arrangement.assetDisplayMode === "assets-and-proxies"
+        const requestedDisplayMode = station.assetDisplayMode ?? arrangement.assetDisplayMode;
+        const displayMode = requestedDisplayMode === "assets-and-proxies"
           ? "assets-and-proxies"
           : "assets-only";
         const configuredProxyCount = Math.max(
