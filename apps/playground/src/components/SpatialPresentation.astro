@@ -135,8 +135,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
   } from "../lib/spatialEnvelope";
   import {
     chooseFocusSide,
-    focusCameraDistance,
-    focusObjectAnchor,
+    solveFocusComposition,
     type FocusSide
   } from "../lib/focusExperience";
 
@@ -1253,17 +1252,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
             ? { mode: "hemisphere", hemisphere: "front", cameraPreset: "top", repositionObjectName: "" }
             : { mode: "none" };
         } else if (key === "editor.hemisphere") {
-          if (focusExperience && focusExperience.stationIndex === arrivingAt) {
-            const center = stationCenter(arrivingAt);
-            const basis = screenBasis(center, cam);
-            const T3: any = THREE;
-            const matrix = new T3.Matrix4().makeBasis(
-              new T3.Vector3(basis.right.x, basis.right.y, basis.right.z),
-              new T3.Vector3(basis.up.x, basis.up.y, basis.up.z),
-              new T3.Vector3(-basis.forward.x, -basis.forward.y, -basis.forward.z)
-            );
-            threeCamera.quaternion.setFromRotationMatrix(matrix);
-          } else if (presentationSettings.editor.mode === "hemisphere") {
+          if (presentationSettings.editor.mode === "hemisphere") {
             presentationSettings.editor.hemisphere = value === "back" ? "back" : "front";
           }
         } else if (key === "editor.cameraPreset") {
@@ -1558,7 +1547,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         startSpin: number;
         startedAt: number;
         cameraDistance: number;
-        cameraTarget: Vec3;
+        cameraOffsetX: number;
+        targetOffsetX: number;
+        cameraStart: Vec3;
       };
       let focusExperience: FocusExperienceState | null = null;
 
@@ -2322,10 +2313,18 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
 
         if (focusExperience && focusExperience.stationIndex === arrivingAt) {
           const center = stationCenter(arrivingAt);
-          return {
-            x: center.x,
-            y: center.y,
+          const elapsed = Math.max(0, performance.now() - focusExperience.startedAt);
+          const t = Math.min(1, elapsed / 1450);
+          const eased = 1 - Math.pow(1 - t, 3);
+          const end = {
+            x: center.x + focusExperience.cameraOffsetX,
+            y: center.y + 0.18,
             z: center.z + focusExperience.cameraDistance
+          };
+          return {
+            x: focusExperience.cameraStart.x + (end.x - focusExperience.cameraStart.x) * eased,
+            y: focusExperience.cameraStart.y + (end.y - focusExperience.cameraStart.y) * eased,
+            z: focusExperience.cameraStart.z + (end.z - focusExperience.cameraStart.z) * eased
           };
         }
 
@@ -3195,28 +3194,27 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         const stationIndex = arrivingAt;
         const radius = objectBodyRadius(obj);
         const side = chooseFocusSide(obj.local.x);
-        const anchor = focusObjectAnchor(side, radius);
         const aspect = Math.max(0.5, width / Math.max(1, height));
-        const distance = focusCameraDistance({
+        const normalCamera = cameraPosition();
+        const composition = solveFocusComposition({
+          side,
           objectRadius: radius,
-          objectX: anchor.x,
-          imageHalfWidth: 2.7,
-          imageHalfHeight: 2.95,
-          verticalFovDegrees: 50,
           aspect,
-          padding: 0.55
+          normalCameraDistance: presentationSettings.camera.distanceFromCenter
         });
 
         focusExperience = {
           stationIndex,
           object: obj,
           side,
-          anchor,
+          anchor: composition.anchor,
           startLocal: { ...obj.local },
           startSpin: obj.spin,
           startedAt: performance.now(),
-          cameraDistance: Math.max(5.4, Math.min(distance, presentationSettings.camera.distanceFromCenter)),
-          cameraTarget: stationCenter(stationIndex)
+          cameraDistance: composition.cameraDistance,
+          cameraOffsetX: composition.cameraOffsetX,
+          targetOffsetX: composition.targetOffsetX,
+          cameraStart: { ...normalCamera }
         };
 
         targetYaw = 0;
@@ -3239,8 +3237,16 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           targetYaw = editPose.yaw;
           targetPitch = editPose.pitch;
         } else if (focusExperience && focusExperience.stationIndex === arrivingAt) {
-          targetYaw = 0;
-          targetPitch = 0;
+          const center = stationCenter(arrivingAt);
+          const cam = cameraPosition();
+          const target = {
+            x: center.x + focusExperience.targetOffsetX,
+            y: center.y,
+            z: center.z + Math.max(0.08, focusExperience.anchor.z * 0.18)
+          };
+          const angles = lookAnglesAt(target, cam);
+          targetYaw = angles.yaw;
+          targetPitch = angles.pitch;
         } else if (presentationSettings.camera.mode === "locked") {
           targetYaw = 0;
           targetPitch = 0;
@@ -3319,7 +3325,22 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           const cam = cameraPosition();
           threeCamera.position.set(cam.x, cam.y, cam.z);
 
-          if (presentationSettings.editor.mode === "hemisphere") {
+          if (focusExperience && focusExperience.stationIndex === arrivingAt) {
+            const center = stationCenter(arrivingAt);
+            const target = {
+              x: center.x + focusExperience.targetOffsetX,
+              y: center.y,
+              z: center.z + Math.max(0.08, focusExperience.anchor.z * 0.18)
+            };
+            const basis = screenBasis(target, cam);
+            const T3: any = THREE;
+            const matrix = new T3.Matrix4().makeBasis(
+              new T3.Vector3(basis.right.x, basis.right.y, basis.right.z),
+              new T3.Vector3(basis.up.x, basis.up.y, basis.up.z),
+              new T3.Vector3(-basis.forward.x, -basis.forward.y, -basis.forward.z)
+            );
+            threeCamera.quaternion.setFromRotationMatrix(matrix);
+          } else if (presentationSettings.editor.mode === "hemisphere") {
             // Use the exact same camera basis as the editor's projection math.
             // Three.js cameras look down local -Z, so the third basis vector is -forward.
             const center = stationCenter(arrivingAt);
