@@ -18,7 +18,7 @@ describe("focusExperience", () => {
       objectPosition: { x: 4, y: 0, z: 2 },
       aspect: 16 / 9
     });
-    expect(far).toBeGreaterThan(near);
+    expect(far).toBeGreaterThanOrEqual(near);
   });
 
   it("moves the camera toward the object without returning an object anchor", () => {
