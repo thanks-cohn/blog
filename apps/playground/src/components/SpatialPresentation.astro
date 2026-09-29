@@ -2080,11 +2080,11 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         // clear starting composition by updating the runtime offset only.
         if (obj.anchorMode === "camera-midpoint") {
           const halfDistance = presentationSettings.camera.distanceFromCenter * 0.5;
-          const side = obj.hemisphere === "back" ? -1 : 1;
+          // This helper already returned for back-hemisphere objects above.
           obj.anchorOffset = {
             x: obj.local.x,
             y: obj.local.y,
-            z: obj.local.z - side * halfDistance
+            z: obj.local.z - halfDistance
           };
         }
       }
