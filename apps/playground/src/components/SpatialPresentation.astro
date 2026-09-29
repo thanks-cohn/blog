@@ -1550,6 +1550,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         cameraOffsetY: number;
         targetOffsetX: number;
         targetOffsetY: number;
+        targetOffsetZ: number;
         textSide: "left" | "right";
         cameraStart: Vec3;
       };
@@ -2729,8 +2730,16 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         enforceHemisphere(obj);
         constrainToSphere(obj);
 
-        // Rule 2 is optional and only applies to the section currently being viewed.
-        if (presentationSettings.viewport.enabled && stationIndex === arrivingAt) {
+        // Normal visitor framing rule. Focus mode deliberately suspends this:
+        // only the selected object + main picture define the shot, and other
+        // assets are allowed to leave the viewport.
+        const focusOwnsComposition =
+          focusExperience && focusExperience.stationIndex === stationIndex;
+        if (
+          !focusOwnsComposition &&
+          presentationSettings.viewport.enabled &&
+          stationIndex === arrivingAt
+        ) {
           for (let pass = 0; pass < 5; pass++) {
             constrainToViewport(center, obj);
             enforceHemisphere(obj);
@@ -3195,13 +3204,11 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
       function beginFocusExperience(obj: SceneObject) {
         const stationIndex = arrivingAt;
         const radius = objectBodyRadius(obj);
-        const aspect = Math.max(0.5, width / Math.max(1, height));
         const normalCamera = cameraPosition();
         const baseLocal = { ...obj.local };
         const composition = solveFocusComposition({
           objectPosition: baseLocal,
           objectRadius: radius,
-          aspect,
           normalCameraDistance: presentationSettings.camera.distanceFromCenter
         });
 
@@ -3218,6 +3225,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           cameraOffsetY: composition.cameraOffsetY,
           targetOffsetX: composition.targetOffsetX,
           targetOffsetY: composition.targetOffsetY,
+          targetOffsetZ: composition.targetOffsetZ,
           textSide: composition.textSide,
           cameraStart: { ...normalCamera }
         };
@@ -3247,7 +3255,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           const target = {
             x: center.x + focusExperience.targetOffsetX,
             y: center.y + focusExperience.targetOffsetY,
-            z: center.z + Math.max(0.05, focusExperience.baseLocal.z * 0.14)
+            z: center.z + focusExperience.targetOffsetZ
           };
           const angles = lookAnglesAt(target, cam);
           targetYaw = angles.yaw;
@@ -3350,7 +3358,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
             const target = {
               x: center.x + focusExperience.targetOffsetX,
               y: center.y + focusExperience.targetOffsetY,
-              z: center.z + Math.max(0.05, focusExperience.baseLocal.z * 0.14)
+              z: center.z + focusExperience.targetOffsetZ
             };
             const basis = screenBasis(target, cam);
             const T3: any = THREE;
