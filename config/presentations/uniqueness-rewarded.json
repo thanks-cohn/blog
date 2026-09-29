@@ -56,7 +56,11 @@
       "maxTossSpeed": 2.6
     },
     "assetDisplayMode": "assets-only",
-    "proxyCount": 12
+    "proxyCount": 12,
+    "asset3d": {
+      "layer": "middle",
+      "hideBehindImage": true
+    }
   },
   "stations": [
     {
@@ -72,7 +76,11 @@
         "mode": "timer",
         "delayMs": 1700
       },
-      "assetDisplayMode": "assets-only"
+      "assetDisplayMode": "assets-only",
+      "asset3d": {
+        "layer": "near",
+        "hideBehindImage": false
+      }
     },
     {
       "id": "blue-room",
@@ -87,7 +95,11 @@
         "mode": "click",
         "delayMs": 0
       },
-      "assetDisplayMode": "assets-and-proxies"
+      "assetDisplayMode": "assets-and-proxies",
+      "asset3d": {
+        "layer": "middle",
+        "hideBehindImage": true
+      }
     },
     {
       "id": "rose-archive",
@@ -102,7 +114,11 @@
         "mode": "timer",
         "delayMs": 2200
       },
-      "assetDisplayMode": "assets-and-proxies"
+      "assetDisplayMode": "assets-and-proxies",
+      "asset3d": {
+        "layer": "middle",
+        "hideBehindImage": true
+      }
     }
   ],
   "assetActions": {}
