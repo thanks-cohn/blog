@@ -2509,11 +2509,16 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
       }
 
       function mainImageUrlFor(station: any) {
-        return String(
-          station?.centerImage ??
-          config.centerImagesByArtwork?.[station.artworkName] ??
-          ""
-        );
+        const bundled = config.centerImagesByArtwork?.[station.artworkName];
+        const configured = station?.centerImage;
+
+        // Repo-managed center images live in src/assets/2d-assets and Astro
+        // rewrites them to hashed build URLs. Prefer that resolved URL whenever
+        // a matching *-center asset exists; a bare filename is metadata, not a
+        // browser-loadable public path.
+        if (bundled) return String(bundled);
+        if (typeof configured === "string" && configured) return configured;
+        return "";
       }
 
       function ensureMainImagePlane(station: any, center: Vec3) {
