@@ -1,32 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { chooseFocusSide, focusCameraDistance, focusObjectAnchor, solveFocusComposition } from "./focusExperience";
+import { chooseFocusSide, focusCameraDistance, solveFocusComposition } from "./focusExperience";
 
 describe("focusExperience", () => {
-  it("keeps the object on its current side when possible", () => {
+  it("derives the composition side from the object's existing position", () => {
     expect(chooseFocusSide(-2)).toBe("left");
     expect(chooseFocusSide(2)).toBe("right");
   });
 
-  it("places the focused object outside the main image footprint", () => {
-    const left = focusObjectAnchor("left", 1);
-    const right = focusObjectAnchor("right", 1);
-    expect(left.x).toBeLessThan(-2.7);
-    expect(right.x).toBeGreaterThan(2.7);
-  });
-
-  it("backs the camera up farther for larger composite framing", () => {
-    const near = focusCameraDistance({ objectRadius: 0.5, objectX: 3.5, aspect: 16 / 9 });
-    const far = focusCameraDistance({ objectRadius: 1.5, objectX: 4.5, aspect: 16 / 9 });
+  it("backs up farther when the current object position needs a larger composite frame", () => {
+    const near = focusCameraDistance({
+      objectRadius: 0.5,
+      objectPosition: { x: 1, y: 0, z: 0.5 },
+      aspect: 16 / 9
+    });
+    const far = focusCameraDistance({
+      objectRadius: 1.5,
+      objectPosition: { x: 4, y: 0, z: 2 },
+      aspect: 16 / 9
+    });
     expect(far).toBeGreaterThan(near);
   });
 
-  it("creates an asymmetric cinematic composition", () => {
-    const left = solveFocusComposition({ side: "left", objectRadius: 1, aspect: 16 / 9, normalCameraDistance: 9 });
-    const right = solveFocusComposition({ side: "right", objectRadius: 1, aspect: 16 / 9, normalCameraDistance: 9 });
-    expect(left.cameraOffsetX).toBeLessThan(0);
-    expect(left.targetOffsetX).toBeLessThan(0);
-    expect(right.cameraOffsetX).toBeGreaterThan(0);
-    expect(right.targetOffsetX).toBeGreaterThan(0);
-    expect(right.cameraDistance).toBeLessThan(9);
+  it("moves the camera toward the object without returning an object anchor", () => {
+    const composition = solveFocusComposition({
+      objectPosition: { x: 3, y: 0.4, z: 1 },
+      objectRadius: 1,
+      aspect: 16 / 9,
+      normalCameraDistance: 9
+    });
+    expect(composition.side).toBe("right");
+    expect(composition.cameraOffsetX).toBeGreaterThan(0);
+    expect(composition.targetOffsetX).toBeGreaterThan(0);
+    expect("anchor" in composition).toBe(false);
+    expect(composition.textSide).toBe("left");
   });
 });
