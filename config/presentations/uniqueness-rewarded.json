@@ -91,6 +91,9 @@
     },
     "initialPlacement": {
       "keepViewerImageSightlineClear": true
+    },
+    "interaction": {
+      "contextMenuMode": "experience"
     }
   },
   "stations": [
