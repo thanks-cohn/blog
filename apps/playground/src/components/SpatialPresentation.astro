@@ -169,11 +169,16 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     | "editor.hemisphere"
     | "editor.cameraPreset"
     | "editor.repositionObjectName"
+    | "textPlane.enabled"
     | "textPlane.color"
     | "textPlane.width"
     | "textPlane.height"
     | "textPlane.offsetY"
-    | "textPlane.offsetZ";
+    | "textPlane.offsetZ"
+    | "textPlane.attachment"
+    | "textPlane.orientationMode"
+    | "textPlane.rotationAxis"
+    | "textPlane.angleDegrees";
   type PresentationSettingValue = boolean | number | string;
   type AssetHemisphere = "front" | "back";
   type AssetPlacementState = Record<string, { hemisphere: AssetHemisphere; visible: boolean }>;
@@ -200,7 +205,18 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       };
     };
     editor: EditLayerState;
-    textPlane: { color: string; width: number; height: number; offsetY: number; offsetZ: number };
+    textPlane: {
+      enabled: boolean;
+      color: string;
+      width: number;
+      height: number;
+      offsetY: number;
+      offsetZ: number;
+      attachment: "separate";
+      orientationMode: "axis-angle";
+      rotationAxis: "center-horizontal-line";
+      angleDegrees: number;
+    };
   };
   type GlbRuntimeStatus = "acknowledged" | "loading" | "loaded" | "retrying" | "failed";
   type SettingsListener = (settings: PresentationSettingsSnapshot) => void;
@@ -590,11 +606,16 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         },
         editor: { mode: "none" },
         textPlane: {
+          enabled: Boolean(station?.textPlane?.enabled ?? config.arrangement?.textPlane?.enabled ?? true),
           color: String(station?.textPlane?.color ?? config.arrangement?.textPlane?.color ?? "#ffffff"),
           width: Math.max(0.2, Number(station?.textPlane?.width ?? config.arrangement?.textPlane?.width ?? 5.0)),
           height: Math.max(0.15, Number(station?.textPlane?.height ?? config.arrangement?.textPlane?.height ?? 0.75)),
           offsetY: Number(station?.textPlane?.offsetY ?? config.arrangement?.textPlane?.offsetY ?? -2.82),
-          offsetZ: Number(station?.textPlane?.offsetZ ?? config.arrangement?.textPlane?.offsetZ ?? 0.72)
+          offsetZ: Number(station?.textPlane?.offsetZ ?? config.arrangement?.textPlane?.offsetZ ?? 0.72),
+          attachment: "separate",
+          orientationMode: "axis-angle",
+          rotationAxis: "center-horizontal-line",
+          angleDegrees: Number(station?.textPlane?.angleDegrees ?? config.arrangement?.textPlane?.angleDegrees ?? 0)
         }
       };
     }
@@ -633,11 +654,16 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             }
           : { mode: "none" },
         textPlane: {
+          enabled: Boolean(source.textPlane.enabled),
           color: String(source.textPlane.color),
           width: Number(source.textPlane.width),
           height: Number(source.textPlane.height),
           offsetY: Number(source.textPlane.offsetY),
-          offsetZ: Number(source.textPlane.offsetZ)
+          offsetZ: Number(source.textPlane.offsetZ),
+          attachment: "separate",
+          orientationMode: "axis-angle",
+          rotationAxis: "center-horizontal-line",
+          angleDegrees: Number(source.textPlane.angleDegrees)
         }
       };
     }
@@ -717,11 +743,18 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             }
           : { mode: "none" },
         textPlane: {
+          enabled: typeof raw?.textPlane?.enabled === "boolean" ? raw.textPlane.enabled : defaults.textPlane.enabled,
           color: typeof raw?.textPlane?.color === "string" ? raw.textPlane.color : defaults.textPlane.color,
           width: Number.isFinite(Number(raw?.textPlane?.width)) ? Math.max(0.2, Number(raw.textPlane.width)) : defaults.textPlane.width,
           height: Number.isFinite(Number(raw?.textPlane?.height)) ? Math.max(0.15, Number(raw.textPlane.height)) : defaults.textPlane.height,
           offsetY: Number.isFinite(Number(raw?.textPlane?.offsetY)) ? Number(raw.textPlane.offsetY) : defaults.textPlane.offsetY,
-          offsetZ: Number.isFinite(Number(raw?.textPlane?.offsetZ)) ? Number(raw.textPlane.offsetZ) : defaults.textPlane.offsetZ
+          offsetZ: Number.isFinite(Number(raw?.textPlane?.offsetZ)) ? Number(raw.textPlane.offsetZ) : defaults.textPlane.offsetZ,
+          attachment: "separate",
+          orientationMode: "axis-angle",
+          rotationAxis: "center-horizontal-line",
+          angleDegrees: Number.isFinite(Number(raw?.textPlane?.angleDegrees))
+            ? Number(raw.textPlane.angleDegrees)
+            : defaults.textPlane.angleDegrees
         }
       };
       normalizeCameraForSphere(loaded);
@@ -892,11 +925,48 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           description: "Hemisphere Editor only: image stays visible and the active half stays spatially useful.",
           options: HEMISPHERE_CAMERA_PRESETS.map((preset) => ({ value: preset.id, label: preset.label }))
         },
-        { key: "textPlane.color", label: "Text plane color", group: "textPlane", control: "color", description: "Separate horizontal world-space plaque at the image's feet." },
+        { key: "textPlane.enabled", label: "Text plane", group: "textPlane", control: "toggle", description: "Separate world-space plaque at the image's feet." },
+        { key: "textPlane.color", label: "Text plane color", group: "textPlane", control: "color" },
         { key: "textPlane.width", label: "Text plane width", group: "textPlane", control: "number", min: 0.2, step: 0.1 },
         { key: "textPlane.height", label: "Text plane depth", group: "textPlane", control: "number", min: 0.15, step: 0.05 },
         { key: "textPlane.offsetY", label: "Text plane height offset", group: "textPlane", control: "number", step: 0.05 },
-        { key: "textPlane.offsetZ", label: "Text plane forward offset", group: "textPlane", control: "number", step: 0.05 }
+        { key: "textPlane.offsetZ", label: "Text plane forward offset", group: "textPlane", control: "number", step: 0.05 },
+        {
+          key: "textPlane.attachment",
+          label: "Attachment",
+          group: "textPlane",
+          control: "select",
+          readOnly: true,
+          description: "The plaque remains visually separate from the main image.",
+          options: [{ value: "separate", label: "Separate" }]
+        },
+        {
+          key: "textPlane.orientationMode",
+          label: "Orientation",
+          group: "textPlane",
+          control: "select",
+          readOnly: true,
+          options: [{ value: "axis-angle", label: "Axis + angle" }]
+        },
+        {
+          key: "textPlane.rotationAxis",
+          label: "Rotation axis",
+          group: "textPlane",
+          control: "select",
+          readOnly: true,
+          description: "The plaque pivots around its own centered horizontal line.",
+          options: [{ value: "center-horizontal-line", label: "Center horizontal line" }]
+        },
+        {
+          key: "textPlane.angleDegrees",
+          label: "Plane angle",
+          group: "textPlane",
+          control: "number",
+          description: "0° faces straight up. Change the angle without moving the plane's center.",
+          min: -180,
+          max: 180,
+          step: 1
+        }
       ];
     }
 
@@ -917,11 +987,16 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (key === "editor.hemisphere") return presentationSettings.editor.mode === "hemisphere" ? presentationSettings.editor.hemisphere : "front";
         if (key === "editor.cameraPreset") return presentationSettings.editor.mode === "hemisphere" ? presentationSettings.editor.cameraPreset : "top";
         if (key === "editor.repositionObjectName") return presentationSettings.editor.mode === "hemisphere" ? presentationSettings.editor.repositionObjectName : "";
+        if (key === "textPlane.enabled") return presentationSettings.textPlane.enabled;
         if (key === "textPlane.color") return presentationSettings.textPlane.color;
         if (key === "textPlane.width") return presentationSettings.textPlane.width;
         if (key === "textPlane.height") return presentationSettings.textPlane.height;
         if (key === "textPlane.offsetY") return presentationSettings.textPlane.offsetY;
         if (key === "textPlane.offsetZ") return presentationSettings.textPlane.offsetZ;
+        if (key === "textPlane.attachment") return presentationSettings.textPlane.attachment;
+        if (key === "textPlane.orientationMode") return presentationSettings.textPlane.orientationMode;
+        if (key === "textPlane.rotationAxis") return presentationSettings.textPlane.rotationAxis;
+        if (key === "textPlane.angleDegrees") return presentationSettings.textPlane.angleDegrees;
         return cloneSettings(presentationSettings);
       },
       set(key: PresentationSettingKey, value: PresentationSettingValue) {
@@ -973,6 +1048,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           }
         } else if (key === "editor.repositionObjectName") {
           if (presentationSettings.editor.mode === "hemisphere") presentationSettings.editor.repositionObjectName = String(value ?? "");
+        } else if (key === "textPlane.enabled") {
+          presentationSettings.textPlane.enabled = Boolean(value);
         } else if (key === "textPlane.color") {
           presentationSettings.textPlane.color = String(value || "#ffffff");
         } else if (key === "textPlane.width") {
@@ -983,6 +1060,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           presentationSettings.textPlane.offsetY = Number(value) || 0;
         } else if (key === "textPlane.offsetZ") {
           presentationSettings.textPlane.offsetZ = Number(value) || 0;
+        } else if (key === "textPlane.angleDegrees") {
+          presentationSettings.textPlane.angleDegrees = Math.max(-180, Math.min(180, Number(value) || 0));
         }
         return publishSettings();
       },
@@ -1012,11 +1091,16 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (key === "debug.glbGlobe.enabled") presentationSettings.debug.glbGlobe.enabled = defaults.debug.glbGlobe.enabled;
         if (key === "debug.glbGlobe.objectName") presentationSettings.debug.glbGlobe.objectName = defaults.debug.glbGlobe.objectName;
         if (key === "editor.mode" || key === "editor.hemisphere" || key === "editor.cameraPreset" || key === "editor.repositionObjectName") presentationSettings.editor = { mode: "none" };
+        if (key === "textPlane.enabled") presentationSettings.textPlane.enabled = defaults.textPlane.enabled;
         if (key === "textPlane.color") presentationSettings.textPlane.color = defaults.textPlane.color;
         if (key === "textPlane.width") presentationSettings.textPlane.width = defaults.textPlane.width;
         if (key === "textPlane.height") presentationSettings.textPlane.height = defaults.textPlane.height;
         if (key === "textPlane.offsetY") presentationSettings.textPlane.offsetY = defaults.textPlane.offsetY;
         if (key === "textPlane.offsetZ") presentationSettings.textPlane.offsetZ = defaults.textPlane.offsetZ;
+        if (key === "textPlane.attachment") presentationSettings.textPlane.attachment = "separate";
+        if (key === "textPlane.orientationMode") presentationSettings.textPlane.orientationMode = "axis-angle";
+        if (key === "textPlane.rotationAxis") presentationSettings.textPlane.rotationAxis = "center-horizontal-line";
+        if (key === "textPlane.angleDegrees") presentationSettings.textPlane.angleDegrees = defaults.textPlane.angleDegrees;
         normalizeCameraForSphere(presentationSettings);
         return publishSettings();
       },
@@ -2295,6 +2379,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       function ensureHorizontalTextPlane(station: any, center: Vec3, current: boolean) {
         if (!threeScene) return;
         const settings = stationSettings[station.id]?.textPlane ?? defaultsForStation(station).textPlane;
+        if (!settings.enabled) {
+          const existing = textPlanes.get(station.id);
+          if (existing) existing.mesh.visible = false;
+          return;
+        }
         const text = current && paperTextOverride ? paperTextOverride : station.text ?? {};
         const title = String(text.title ?? station.label ?? "");
         const body = String(text.body ?? "");
@@ -2352,7 +2441,13 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
         entry.mesh.visible = true;
         entry.mesh.position.set(center.x, center.y + settings.offsetY, center.z + settings.offsetZ);
-        entry.mesh.rotation.set(-Math.PI / 2, 0, 0);
+        // PlaneGeometry starts vertical in XY. -90° lays it flat/upward.
+        // angleDegrees then pivots around the plane's own centered horizontal X axis.
+        entry.mesh.rotation.set(
+          -Math.PI / 2 + settings.angleDegrees * Math.PI / 180,
+          0,
+          0
+        );
       }
 
       function projectedSideImagePlane(center: Vec3, widthWorld = 5.4, heightWorld = 5.9) {
