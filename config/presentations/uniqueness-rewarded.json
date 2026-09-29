@@ -63,6 +63,10 @@
     },
     "controls": {
       "mouseMovesCamera": false
+    },
+    "assetRange": {
+      "minDistanceFromCenter": 4.2,
+      "maxDistanceFromCenter": 6.4
     }
   },
   "stations": [
