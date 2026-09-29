@@ -87,7 +87,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   let threeRenderer: THREE.WebGLRenderer | null = null;
   let threeScene: THREE.Scene | null = null;
   let threeCamera: THREE.PerspectiveCamera | null = null;
-  let gltfLoader: GLTFLoader | null = null;
+  let gltfLoader: any = null;
   const threeObjects = new Map<string, THREE.Object3D>();
   const threeLoading = new Set<string>();
   const occluders = new Map<number, THREE.Mesh>();
@@ -107,7 +107,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     const key = new THREE.DirectionalLight(0xffffff, 2.6);
     key.position.set(5, 8, 6);
     threeScene.add(key);
-    gltfLoader = new GLTFLoader();
+    gltfLoader = new (GLTFLoader as any)();
   }
 
   function ensureThreeObject(obj: SceneObject) {
