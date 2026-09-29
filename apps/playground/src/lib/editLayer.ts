@@ -14,6 +14,7 @@ export type HemisphereEditorState = {
   mode: "hemisphere";
   hemisphere: Hemisphere;
   cameraPreset: HemisphereCameraPreset;
+  zoom: number;
   repositionObjectName: string;
 };
 
@@ -55,6 +56,11 @@ export function hemispherePresetDirection(
     return normalize({ x: -0.62, y: 0.62, z: 0.58 * z });
   }
   return normalize({ x: 0.05, y: 1, z: 0.12 * z });
+}
+
+export function clampHemisphereEditorZoom(value: number) {
+  const zoom = Number.isFinite(Number(value)) ? Number(value) : 1;
+  return Math.max(0.8, Math.min(1.25, zoom));
 }
 
 export function hemisphereEditorDistance(
