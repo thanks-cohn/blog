@@ -185,11 +185,27 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const discovered = Array.isArray(assetsByArtwork[station.artworkName])
           ? assetsByArtwork[station.artworkName]
           : [];
-        const count = discovered.length || Number(sphere.defaultObjectCount) || 10;
+        const displayMode = arrangement.assetDisplayMode === "assets-and-proxies"
+          ? "assets-and-proxies"
+          : "assets-only";
+        const configuredProxyCount = Math.max(
+          0,
+          Math.floor(Number(arrangement.proxyCount ?? sphere.defaultObjectCount ?? 10))
+        );
+        const fallbackProxyCount = discovered.length === 0
+          ? (configuredProxyCount || Number(sphere.defaultObjectCount) || 10)
+          : 0;
+        const extraProxyCount = displayMode === "assets-and-proxies"
+          ? configuredProxyCount
+          : fallbackProxyCount;
+        const sceneItems = [
+          ...discovered.map((asset: DiscoveredAsset) => ({ asset })),
+          ...Array.from({ length: extraProxyCount }, () => ({ asset: undefined }))
+        ];
         const result: SceneObject[] = [];
 
-        for (let i = 0; i < count; i++) {
-          const asset = discovered[i];
+        for (let i = 0; i < sceneItems.length; i++) {
+          const asset = sceneItems[i].asset;
           const kind: "2d" | "3d" = asset?.kind === "2d" ? "2d" : "3d";
           const obj: SceneObject = {
             id: `${station.id}-asset-${i}`,
