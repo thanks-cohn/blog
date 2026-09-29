@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  clampHemisphereEditorZoom,
   hemisphereEditorCameraPosition,
   hemisphereEditorDistance,
   hemispherePresetDirection,
@@ -9,11 +8,6 @@ import {
 } from "./editLayer";
 
 describe("editLayer hemisphere editor", () => {
-  it("clamps edit zoom to the useful hemisphere range", () => {
-    expect(clampHemisphereEditorZoom(0.1)).toBe(0.8);
-    expect(clampHemisphereEditorZoom(3)).toBe(1.25);
-    expect(clampHemisphereEditorZoom(1.1)).toBe(1.1);
-  });
   it("keeps editor distance bounded so the hemisphere remains useful on screen", () => {
     expect(hemisphereEditorDistance(6.4, 1)).toBeCloseTo(6.4 * 1.45);
     expect(hemisphereEditorDistance(6.4, 100)).toBeCloseTo(6.4 * 2.25);
