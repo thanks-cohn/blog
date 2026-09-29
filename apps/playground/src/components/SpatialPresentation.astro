@@ -1549,6 +1549,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         cameraDistance: number;
         cameraOffsetX: number;
         targetOffsetX: number;
+        textSide: "left" | "right";
         cameraStart: Vec3;
       };
       let focusExperience: FocusExperienceState | null = null;
@@ -3214,6 +3215,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           cameraDistance: composition.cameraDistance,
           cameraOffsetX: composition.cameraOffsetX,
           targetOffsetX: composition.targetOffsetX,
+          textSide: composition.textSide,
           cameraStart: { ...normalCamera }
         };
 
@@ -3402,6 +3404,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
             objectId: obj.id,
             objectName: obj.name,
             side: focusExperience?.side,
+            textSide: focusExperience?.textSide,
             action: "come-into-our-world"
           }
         }));
