@@ -340,34 +340,61 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       (gltf: any) => {
         const T3: any = THREE;
         const root: any = gltf.scene;
-        const box: any = new T3.Box3().setFromObject(root);
-        const center: any = box.getCenter(new T3.Vector3());
-        const size: any = box.getSize(new T3.Vector3());
-        const maxDimension = Math.max(size.x, size.y, size.z) || 1;
-        root.position.sub(center);
-        root.scale.setScalar(2 / maxDimension);
+        const sourceBox: any = new T3.Box3().setFromObject(root);
+        const sourceCenter: any = sourceBox.getCenter(new T3.Vector3());
+        const sourceSize: any = sourceBox.getSize(new T3.Vector3());
+        const maxDimension = Math.max(sourceSize.x, sourceSize.y, sourceSize.z) || 1;
+        const normalizationScale = 2 / maxDimension;
 
-        // Recompute bounds after normalization. Viewport collision must use the
-        // actual visible model extents rather than an estimated radius.
-        root.updateMatrixWorld(true);
-        const normalizedBox: any = new T3.Box3().setFromObject(root);
+        // IMPORTANT: centering and scaling must live on separate transform nodes.
+        // A single node computes T * R * S, which would leave a source model whose
+        // bounding-box center is far from its origin visibly offset from the logical
+        // object center used by the hemisphere solver.
+        const centerer: any = new T3.Group();
+        root.position.x -= sourceCenter.x;
+        root.position.y -= sourceCenter.y;
+        root.position.z -= sourceCenter.z;
+        centerer.add(root);
+
+        const normalizer: any = new T3.Group();
+        normalizer.scale.setScalar(normalizationScale);
+        normalizer.add(centerer);
+        normalizer.updateMatrixWorld(true);
+
+        // Bounds are now measured around the same origin used by hemisphere math.
+        const normalizedBox: any = new T3.Box3().setFromObject(normalizer);
+        const normalizedCenter: any = normalizedBox.getCenter(new T3.Vector3());
+        const centeredTolerance = 0.0005;
+        if (
+          Math.abs(normalizedCenter.x) > centeredTolerance ||
+          Math.abs(normalizedCenter.y) > centeredTolerance ||
+          Math.abs(normalizedCenter.z) > centeredTolerance
+        ) {
+          // Compensate any residual transform inherited from the source scene.
+          centerer.position.x -= normalizedCenter.x / normalizationScale;
+          centerer.position.y -= normalizedCenter.y / normalizationScale;
+          centerer.position.z -= normalizedCenter.z / normalizationScale;
+          normalizer.updateMatrixWorld(true);
+        }
+
+        const finalBox: any = new T3.Box3().setFromObject(normalizer);
         obj.modelBounds = {
           min: {
-            x: normalizedBox.min.x,
-            y: normalizedBox.min.y,
-            z: normalizedBox.min.z
+            x: finalBox.min.x,
+            y: finalBox.min.y,
+            z: finalBox.min.z
           },
           max: {
-            x: normalizedBox.max.x,
-            y: normalizedBox.max.y,
-            z: normalizedBox.max.z
+            x: finalBox.max.x,
+            y: finalBox.max.y,
+            z: finalBox.max.z
           }
         };
-        const normalizedSphere: any = normalizedBox.getBoundingSphere(new T3.Sphere());
+        const normalizedSphere: any = finalBox.getBoundingSphere(new T3.Sphere());
         obj.modelRadius = normalizedSphere.radius;
 
         const group: any = new T3.Group();
-        group.add(root);
+        group.add(normalizer);
         group.visible = false;
         threeScene.add(group);
         threeObjects.set(obj.id, group);
@@ -1756,6 +1783,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             obj.hemisphere = state.hemisphere;
             obj.visible = state.visible;
             enforceHemisphere(obj);
+            constrainToSphere(obj);
           }
         }
       }
@@ -2319,6 +2347,17 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         obj.velocity = constrained.velocity;
       }
 
+      function visibleModelFitsAssignedHemisphere(obj: SceneObject) {
+        if (obj.kind !== "3d" || !obj.modelBounds) return true;
+        const scaledMinZ = obj.modelBounds.min.z * obj.size;
+        const scaledMaxZ = obj.modelBounds.max.z * obj.size;
+        const worldMinZ = obj.local.z + scaledMinZ;
+        const worldMaxZ = obj.local.z + scaledMaxZ;
+        return obj.hemisphere === "back"
+          ? worldMaxZ <= 0.0005
+          : worldMinZ >= -0.0005;
+      }
+
       function solveObjectBounds(stationIndex: number, obj: SceneObject) {
         const center = stationCenter(stationIndex);
 
@@ -2336,6 +2375,18 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           // Final viewport correction followed by a final sphere guarantee.
           constrainToViewport(center, obj);
           enforceHemisphere(obj);
+          constrainToSphere(obj);
+        }
+
+        // Rule 1 applies to the ACTUAL visible model, not merely its logical center.
+        if (obj.kind === "3d" && obj.modelBounds && !visibleModelFitsAssignedHemisphere(obj)) {
+          const scaledMinZ = obj.modelBounds.min.z * obj.size;
+          const scaledMaxZ = obj.modelBounds.max.z * obj.size;
+          if (obj.hemisphere === "front") {
+            obj.local.z = Math.max(obj.local.z, -scaledMinZ + 0.001);
+          } else {
+            obj.local.z = Math.min(obj.local.z, -scaledMaxZ - 0.001);
+          }
           constrainToSphere(obj);
         }
       }
