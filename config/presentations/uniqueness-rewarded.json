@@ -60,6 +60,9 @@
     "asset3d": {
       "layer": "middle",
       "hideBehindImage": true
+    },
+    "controls": {
+      "mouseMovesCamera": false
     }
   },
   "stations": [
