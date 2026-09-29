@@ -143,5 +143,31 @@
       }
     }
   ],
-  "assetActions": {}
+  "assetActions": {},
+  "assetMotion": {
+    "first-light-1.glb": {
+      "type": "free"
+    },
+    "first-light-2.glb": {
+      "type": "fixed",
+      "fixedMode": "range",
+      "range": 0.6,
+      "behavior": {
+        "type": "bob",
+        "amplitude": 0.38,
+        "speed": 0.7
+      },
+      "anchor": {
+        "mode": "camera-midpoint",
+        "offset": {
+          "x": 1.9,
+          "y": 0,
+          "z": 0
+        }
+      }
+    },
+    "first-light-3.glb": {
+      "type": "free"
+    }
+  }
 }
