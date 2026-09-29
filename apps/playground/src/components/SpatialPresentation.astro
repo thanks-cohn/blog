@@ -107,6 +107,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   } from "../lib/objectMotion";
   import {
     HEMISPHERE_CAMERA_PRESETS,
+    clampHemisphereEditorZoom,
     hemisphereEditorCameraPosition,
     lookAnglesAt,
     screenBasis,
@@ -168,6 +169,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     | "editor.mode"
     | "editor.hemisphere"
     | "editor.cameraPreset"
+    | "editor.zoom"
     | "editor.repositionObjectName";
   type PresentationSettingValue = boolean | number | string;
   type AssetHemisphere = "front" | "back";
@@ -230,6 +232,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         getEditorState(): EditLayerState;
         setEditorMode(mode: "none" | "hemisphere", hemisphere?: AssetHemisphere): PresentationSettingsSnapshot;
         setEditorCameraPreset(preset: HemisphereCameraPreset): PresentationSettingsSnapshot;
+        setEditorZoom(zoom: number): PresentationSettingsSnapshot;
+        zoomEditorCamera(direction: "in" | "out" | "reset"): PresentationSettingsSnapshot;
         setRepositionObject(name: string | null): PresentationSettingsSnapshot;
         listEditorCameraPresets(): Array<{ id: HemisphereCameraPreset; label: string }>;
       };
@@ -615,6 +619,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
               mode: "hemisphere",
               hemisphere: source.editor.hemisphere,
               cameraPreset: source.editor.cameraPreset,
+              zoom: clampHemisphereEditorZoom(source.editor.zoom),
               repositionObjectName: source.editor.repositionObjectName
             }
           : { mode: "none" }
@@ -689,6 +694,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
                 raw?.editor?.cameraPreset === "top-left-down"
                   ? raw.editor.cameraPreset
                   : "top",
+              zoom: clampHemisphereEditorZoom(Number(raw?.editor?.zoom ?? 1)),
               repositionObjectName:
                 typeof raw?.editor?.repositionObjectName === "string"
                   ? raw.editor.repositionObjectName
@@ -863,6 +869,16 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           control: "select",
           description: "Hemisphere Editor only: image stays visible and the active half stays spatially useful.",
           options: HEMISPHERE_CAMERA_PRESETS.map((preset) => ({ value: preset.id, label: preset.label }))
+        },
+        {
+          key: "editor.zoom",
+          label: "Editor zoom",
+          group: "editor",
+          control: "number",
+          description: "+ / − also zoom the Hemisphere Editor camera.",
+          min: 0.8,
+          max: 1.25,
+          step: 0.05
         }
       ];
     }
@@ -883,6 +899,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (key === "editor.mode") return presentationSettings.editor.mode;
         if (key === "editor.hemisphere") return presentationSettings.editor.mode === "hemisphere" ? presentationSettings.editor.hemisphere : "front";
         if (key === "editor.cameraPreset") return presentationSettings.editor.mode === "hemisphere" ? presentationSettings.editor.cameraPreset : "top";
+        if (key === "editor.zoom") return presentationSettings.editor.mode === "hemisphere" ? presentationSettings.editor.zoom : 1;
         if (key === "editor.repositionObjectName") return presentationSettings.editor.mode === "hemisphere" ? presentationSettings.editor.repositionObjectName : "";
         return cloneSettings(presentationSettings);
       },
@@ -920,7 +937,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           presentationSettings.debug.glbGlobe.objectName = String(value ?? "");
         } else if (key === "editor.mode") {
           presentationSettings.editor = value === "hemisphere"
-            ? { mode: "hemisphere", hemisphere: "front", cameraPreset: "top", repositionObjectName: "" }
+            ? { mode: "hemisphere", hemisphere: "front", cameraPreset: "top", zoom: 1, repositionObjectName: "" }
             : { mode: "none" };
         } else if (key === "editor.hemisphere") {
           if (presentationSettings.editor.mode === "hemisphere") {
@@ -932,6 +949,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
               value === "side" || value === "bottom-corner-up" || value === "top-left-down"
                 ? value
                 : "top";
+          }
+        } else if (key === "editor.zoom") {
+          if (presentationSettings.editor.mode === "hemisphere") {
+            presentationSettings.editor.zoom = clampHemisphereEditorZoom(Number(value));
           }
         } else if (key === "editor.repositionObjectName") {
           if (presentationSettings.editor.mode === "hemisphere") {
@@ -965,7 +986,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (key === "viewport.paddingPx") presentationSettings.viewport.paddingPx = defaults.viewport.paddingPx;
         if (key === "debug.glbGlobe.enabled") presentationSettings.debug.glbGlobe.enabled = defaults.debug.glbGlobe.enabled;
         if (key === "debug.glbGlobe.objectName") presentationSettings.debug.glbGlobe.objectName = defaults.debug.glbGlobe.objectName;
-        if (key === "editor.mode" || key === "editor.hemisphere" || key === "editor.cameraPreset" || key === "editor.repositionObjectName") {
+        if (key === "editor.mode" || key === "editor.hemisphere" || key === "editor.cameraPreset" || key === "editor.zoom" || key === "editor.repositionObjectName") {
           presentationSettings.editor = { mode: "none" };
         }
         normalizeCameraForSphere(presentationSettings);
@@ -1056,6 +1077,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
               mode: "hemisphere",
               hemisphere: hemisphere === "back" ? "back" : "front",
               cameraPreset: "top",
+              zoom: 1,
               repositionObjectName: ""
             }
           : { mode: "none" };
@@ -1067,6 +1089,22 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             preset === "side" || preset === "bottom-corner-up" || preset === "top-left-down"
               ? preset
               : "top";
+        }
+        return publishSettings();
+      },
+      setEditorZoom(zoom: number) {
+        if (presentationSettings.editor.mode === "hemisphere") {
+          presentationSettings.editor.zoom = clampHemisphereEditorZoom(zoom);
+        }
+        return publishSettings();
+      },
+      zoomEditorCamera(direction: "in" | "out" | "reset") {
+        if (presentationSettings.editor.mode === "hemisphere") {
+          const current = presentationSettings.editor.zoom;
+          presentationSettings.editor.zoom =
+            direction === "reset"
+              ? 1
+              : clampHemisphereEditorZoom(current + (direction === "in" ? 0.05 : -0.05));
         }
         return publishSettings();
       },
@@ -1759,7 +1797,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           center,
           presentationSettings.sphere.radius,
           presentationSettings.editor.cameraPreset,
-          presentationSettings.editor.hemisphere
+          presentationSettings.editor.hemisphere,
+          presentationSettings.sphere.radius * 1.8 / clampHemisphereEditorZoom(presentationSettings.editor.zoom)
         );
         const angles = lookAnglesAt(center, position);
         return { center, position, ...angles };
@@ -2478,7 +2517,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
               : " · move mouse for free look";
         const hint = arrived()
           ? presentationSettings.editor.mode === "hemisphere"
-            ? `HEMISPHERE EDITOR · ${presentationSettings.editor.hemisphere.toUpperCase()} · right-click for cameras/reposition`
+            ? `HEMISPHERE EDITOR · ${presentationSettings.editor.hemisphere.toUpperCase()} · +/− zoom · right-click for cameras/reposition`
             : `Click the paper to present it · drag or toss floating objects${mouseHint} · ← → ride`
           : "Riding the thread…";
 
@@ -2592,6 +2631,16 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             },
             repositioning
           );
+        }
+
+        if (editor.mode === "hemisphere") {
+          const zoomHeading = document.createElement("div");
+          zoomHeading.className = "edit-context-heading";
+          zoomHeading.textContent = `Zoom · ${Math.round(editor.zoom * 100)}%`;
+          editContextMenu.appendChild(zoomHeading);
+          addEditContextAction("Zoom +", () => api.zoomEditorCamera("in"));
+          addEditContextAction("Zoom −", () => api.zoomEditorCamera("out"));
+          addEditContextAction("Reset zoom", () => api.zoomEditorCamera("reset"), Math.abs(editor.zoom - 1) < 0.001);
         }
 
         const heading = document.createElement("div");
@@ -2759,6 +2808,26 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       });
 
       window.addEventListener("keydown", (event) => {
+        const target = event.target as HTMLElement | null;
+        const typing =
+          target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          target instanceof HTMLSelectElement ||
+          Boolean(target?.isContentEditable);
+
+        if (!typing && presentationSettings.editor.mode === "hemisphere") {
+          if (event.key === "+" || event.key === "=" || event.code === "NumpadAdd") {
+            event.preventDefault();
+            window.webrevPresentationSettings?.zoomEditorCamera("in");
+            return;
+          }
+          if (event.key === "-" || event.key === "_" || event.code === "NumpadSubtract") {
+            event.preventDefault();
+            window.webrevPresentationSettings?.zoomEditorCamera("out");
+            return;
+          }
+        }
+
         if (event.key === "ArrowRight") {
           event.preventDefault();
           requestStation(Math.min(stations.length - 1, arrivingAt + 1));
