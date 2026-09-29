@@ -200,13 +200,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       };
     };
     editor: EditLayerState;
-    textPlane: {
-      color: string;
-      width: number;
-      height: number;
-      offsetY: number;
-      offsetZ: number;
-    };
+    textPlane: { color: string; width: number; height: number; offsetY: number; offsetZ: number };
   };
   type GlbRuntimeStatus = "acknowledged" | "loading" | "loaded" | "retrying" | "failed";
   type SettingsListener = (settings: PresentationSettingsSnapshot) => void;
@@ -599,8 +593,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           color: String(station?.textPlane?.color ?? config.arrangement?.textPlane?.color ?? "#ffffff"),
           width: Math.max(0.2, Number(station?.textPlane?.width ?? config.arrangement?.textPlane?.width ?? 5.0)),
           height: Math.max(0.15, Number(station?.textPlane?.height ?? config.arrangement?.textPlane?.height ?? 0.75)),
-          offsetY: Number(station?.textPlane?.offsetY ?? config.arrangement?.textPlane?.offsetY ?? -2.55),
-          offsetZ: Number(station?.textPlane?.offsetZ ?? config.arrangement?.textPlane?.offsetZ ?? 0.48)
+          offsetY: Number(station?.textPlane?.offsetY ?? config.arrangement?.textPlane?.offsetY ?? -2.82),
+          offsetZ: Number(station?.textPlane?.offsetZ ?? config.arrangement?.textPlane?.offsetZ ?? 0.72)
         }
       };
     }
@@ -898,43 +892,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           description: "Hemisphere Editor only: image stays visible and the active half stays spatially useful.",
           options: HEMISPHERE_CAMERA_PRESETS.map((preset) => ({ value: preset.id, label: preset.label }))
         },
-        {
-          key: "textPlane.color",
-          label: "Text plane color",
-          group: "textPlane",
-          control: "color",
-          description: "World-space monument plane color."
-        },
-        {
-          key: "textPlane.width",
-          label: "Text plane width",
-          group: "textPlane",
-          control: "number",
-          min: 0.2,
-          step: 0.1
-        },
-        {
-          key: "textPlane.height",
-          label: "Text plane height",
-          group: "textPlane",
-          control: "number",
-          min: 0.15,
-          step: 0.05
-        },
-        {
-          key: "textPlane.offsetY",
-          label: "Text plane vertical offset",
-          group: "textPlane",
-          control: "number",
-          step: 0.05
-        },
-        {
-          key: "textPlane.offsetZ",
-          label: "Text plane forward offset",
-          group: "textPlane",
-          control: "number",
-          step: 0.05
-        }
+        { key: "textPlane.color", label: "Text plane color", group: "textPlane", control: "color", description: "Separate horizontal world-space plaque at the image's feet." },
+        { key: "textPlane.width", label: "Text plane width", group: "textPlane", control: "number", min: 0.2, step: 0.1 },
+        { key: "textPlane.height", label: "Text plane depth", group: "textPlane", control: "number", min: 0.15, step: 0.05 },
+        { key: "textPlane.offsetY", label: "Text plane height offset", group: "textPlane", control: "number", step: 0.05 },
+        { key: "textPlane.offsetZ", label: "Text plane forward offset", group: "textPlane", control: "number", step: 0.05 }
       ];
     }
 
@@ -1010,9 +972,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
                 : "top";
           }
         } else if (key === "editor.repositionObjectName") {
-          if (presentationSettings.editor.mode === "hemisphere") {
-            presentationSettings.editor.repositionObjectName = String(value ?? "");
-          }
+          if (presentationSettings.editor.mode === "hemisphere") presentationSettings.editor.repositionObjectName = String(value ?? "");
         } else if (key === "textPlane.color") {
           presentationSettings.textPlane.color = String(value || "#ffffff");
         } else if (key === "textPlane.width") {
@@ -1051,9 +1011,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (key === "viewport.paddingPx") presentationSettings.viewport.paddingPx = defaults.viewport.paddingPx;
         if (key === "debug.glbGlobe.enabled") presentationSettings.debug.glbGlobe.enabled = defaults.debug.glbGlobe.enabled;
         if (key === "debug.glbGlobe.objectName") presentationSettings.debug.glbGlobe.objectName = defaults.debug.glbGlobe.objectName;
-        if (key === "editor.mode" || key === "editor.hemisphere" || key === "editor.cameraPreset" || key === "editor.repositionObjectName") {
-          presentationSettings.editor = { mode: "none" };
-        }
+        if (key === "editor.mode" || key === "editor.hemisphere" || key === "editor.cameraPreset" || key === "editor.repositionObjectName") presentationSettings.editor = { mode: "none" };
         if (key === "textPlane.color") presentationSettings.textPlane.color = defaults.textPlane.color;
         if (key === "textPlane.width") presentationSettings.textPlane.width = defaults.textPlane.width;
         if (key === "textPlane.height") presentationSettings.textPlane.height = defaults.textPlane.height;
@@ -2317,107 +2275,6 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         ctx.restore();
       }
 
-      function textPlaneSettingsFor(station: any) {
-        return stationSettings[station.id]?.textPlane ?? defaultsForStation(station).textPlane;
-      }
-
-      function makeTextPlaneTexture(
-        title: string,
-        body: string,
-        background: string
-      ) {
-        const textureCanvas = document.createElement("canvas");
-        textureCanvas.width = 1024;
-        textureCanvas.height = 256;
-        const textureCtx = textureCanvas.getContext("2d");
-        if (!textureCtx) return null;
-
-        textureCtx.fillStyle = background;
-        textureCtx.fillRect(0, 0, textureCanvas.width, textureCanvas.height);
-
-        const hex = background.replace("#", "");
-        const r = parseInt(hex.slice(0, 2), 16) || 255;
-        const g = parseInt(hex.slice(2, 4), 16) || 255;
-        const b = parseInt(hex.slice(4, 6), 16) || 255;
-        const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-        const ink = luminance > 0.55 ? "#171717" : "#f7f7f7";
-
-        textureCtx.fillStyle = ink;
-        textureCtx.textBaseline = "top";
-        textureCtx.font = "700 48px ui-sans-serif, system-ui";
-        textureCtx.fillText(title, 54, 38, 916);
-
-        textureCtx.font = "30px ui-sans-serif, system-ui";
-        const words = body.split(/\s+/);
-        let line = "";
-        let y = 112;
-        for (const word of words) {
-          const candidate = line ? `${line} ${word}` : word;
-          if (textureCtx.measureText(candidate).width > 916 && line) {
-            textureCtx.fillText(line, 54, y);
-            line = word;
-            y += 40;
-            if (y > 205) break;
-          } else {
-            line = candidate;
-          }
-        }
-        if (line && y <= 205) textureCtx.fillText(line, 54, y);
-
-        const T3: any = THREE;
-        const texture = new T3.CanvasTexture(textureCanvas);
-        texture.needsUpdate = true;
-        return texture;
-      }
-
-      function ensureTextPlane(station: any, center: Vec3, current: boolean) {
-        if (!threeScene) return;
-        const settings = textPlaneSettingsFor(station);
-        const stationText = current && paperTextOverride ? paperTextOverride : station.text ?? {};
-        const title = String(stationText.title ?? station.label ?? "");
-        const body = String(stationText.body ?? "");
-        const signature = [
-          title,
-          body,
-          settings.color,
-          settings.width,
-          settings.height
-        ].join("|");
-
-        let entry = textPlanes.get(station.id);
-        if (!entry || entry.signature !== signature) {
-          if (entry) {
-            threeScene.remove(entry.mesh);
-            entry.mesh.geometry?.dispose?.();
-            entry.mesh.material?.dispose?.();
-            entry.texture?.dispose?.();
-          }
-
-          const texture = makeTextPlaneTexture(title, body, settings.color);
-          if (!texture) return;
-          const T3: any = THREE;
-          const geometry = new T3.PlaneGeometry(settings.width, settings.height);
-          const material = new T3.MeshBasicMaterial({
-            map: texture,
-            side: T3.DoubleSide,
-            transparent: false
-          });
-          const mesh = new T3.Mesh(geometry, material);
-          mesh.renderOrder = 25;
-          threeScene.add(mesh);
-          entry = { mesh, texture, signature };
-          textPlanes.set(station.id, entry);
-        }
-
-        entry.mesh.visible = true;
-        entry.mesh.position.set(
-          center.x,
-          center.y + settings.offsetY,
-          center.z + settings.offsetZ
-        );
-        entry.mesh.rotation.set(0, 0, 0);
-      }
-
       function wrapText(text: string, x: number, y: number, maxWidth: number, lineHeight: number) {
         const words = String(text).split(/\s+/);
         let line = "";
@@ -2433,6 +2290,69 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           }
         }
         if (line) ctx.fillText(line, x, yy);
+      }
+
+      function ensureHorizontalTextPlane(station: any, center: Vec3, current: boolean) {
+        if (!threeScene) return;
+        const settings = stationSettings[station.id]?.textPlane ?? defaultsForStation(station).textPlane;
+        const text = current && paperTextOverride ? paperTextOverride : station.text ?? {};
+        const title = String(text.title ?? station.label ?? "");
+        const body = String(text.body ?? "");
+        const signature = [title, body, settings.color, settings.width, settings.height].join("|");
+        let entry = textPlanes.get(station.id);
+
+        if (!entry || entry.signature !== signature) {
+          if (entry) {
+            threeScene.remove(entry.mesh);
+            entry.mesh.geometry?.dispose?.();
+            entry.mesh.material?.dispose?.();
+            entry.texture?.dispose?.();
+          }
+
+          const textureCanvas = document.createElement("canvas");
+          textureCanvas.width = 1024;
+          textureCanvas.height = 256;
+          const tctx = textureCanvas.getContext("2d");
+          if (!tctx) return;
+          tctx.fillStyle = settings.color;
+          tctx.fillRect(0, 0, 1024, 256);
+
+          const raw = settings.color.replace("#", "");
+          const rr = parseInt(raw.slice(0,2),16) || 255;
+          const gg = parseInt(raw.slice(2,4),16) || 255;
+          const bb = parseInt(raw.slice(4,6),16) || 255;
+          const lum = (0.2126*rr + 0.7152*gg + 0.0722*bb)/255;
+          tctx.fillStyle = lum > 0.55 ? "#171717" : "#f7f7f7";
+          tctx.textBaseline = "top";
+          tctx.font = "700 46px ui-sans-serif, system-ui";
+          tctx.fillText(title, 54, 34, 916);
+          tctx.font = "30px ui-sans-serif, system-ui";
+          const words = body.split(/\s+/);
+          let line = "", y = 108;
+          for (const word of words) {
+            const candidate = line ? `${line} ${word}` : word;
+            if (tctx.measureText(candidate).width > 916 && line) {
+              tctx.fillText(line, 54, y);
+              line = word; y += 40;
+              if (y > 205) break;
+            } else line = candidate;
+          }
+          if (line && y <= 205) tctx.fillText(line, 54, y);
+
+          const T3:any = THREE;
+          const texture = new T3.CanvasTexture(textureCanvas);
+          const geometry = new T3.PlaneGeometry(settings.width, settings.height);
+          const material = new T3.MeshBasicMaterial({ map:texture, side:T3.DoubleSide });
+          const mesh = new T3.Mesh(geometry, material);
+          mesh.renderOrder = 30;
+          threeScene.add(mesh);
+          entry = { mesh, texture, signature };
+          textPlanes.set(station.id, entry);
+        }
+
+        entry.mesh.visible = true;
+        entry.mesh.position.set(center.x, center.y + settings.offsetY, center.z + settings.offsetZ);
+        entry.mesh.rotation.set(-Math.PI / 2, 0, 0);
       }
 
       function projectedSideImagePlane(center: Vec3, widthWorld = 5.4, heightWorld = 5.9) {
@@ -2543,7 +2463,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           ctx.fillText(station.label, imageX + 16, imageY + imageH - 18);
         }
 
-        ensureTextPlane(station, center, current);
+        // Separate horizontal plaque; main image above is untouched.
+        ensureHorizontalTextPlane(station, center, current);
 
         ctx.restore();
       }
@@ -2913,7 +2834,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const y = event.clientY - rect.top;
         if (findHitObject(x, y)) return;
 
-
+        
       });
 
       window.addEventListener("keydown", (event) => {
