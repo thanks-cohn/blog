@@ -1,37 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { chooseFocusSide, focusCameraDistance, solveFocusComposition } from "./focusExperience";
+import { chooseFocusSide, solveFocusComposition } from "./focusExperience";
 
 describe("focusExperience", () => {
-  it("derives the composition side from the object's existing position", () => {
+  it("derives text side from the object's existing position", () => {
     expect(chooseFocusSide(-2)).toBe("left");
     expect(chooseFocusSide(2)).toBe("right");
   });
 
-  it("backs up farther when the current object position needs a larger composite frame", () => {
-    const near = focusCameraDistance({
-      objectRadius: 0.5,
-      objectPosition: { x: 1, y: 0, z: 0.5 },
-      aspect: 16 / 9
-    });
-    const far = focusCameraDistance({
-      objectRadius: 1.5,
-      objectPosition: { x: 4, y: 0, z: 2 },
-      aspect: 16 / 9
-    });
-    expect(far).toBeGreaterThanOrEqual(near);
-  });
-
-  it("moves the camera toward the object without returning an object anchor", () => {
+  it("centers the camera and target on the selected object's current x/y", () => {
     const composition = solveFocusComposition({
-      objectPosition: { x: 3, y: 0.4, z: 1 },
-      objectRadius: 1,
-      aspect: 16 / 9,
+      objectPosition: { x: 2.4, y: -0.7, z: 1.1 },
+      objectRadius: 0.8,
       normalCameraDistance: 9
     });
-    expect(composition.side).toBe("right");
-    expect(composition.cameraOffsetX).toBeGreaterThan(0);
-    expect(composition.targetOffsetX).toBeGreaterThan(0);
-    expect("anchor" in composition).toBe(false);
-    expect(composition.textSide).toBe("left");
+    expect(composition.cameraOffsetX).toBe(2.4);
+    expect(composition.cameraOffsetY).toBe(-0.7);
+    expect(composition.targetOffsetX).toBe(2.4);
+    expect(composition.targetOffsetY).toBe(-0.7);
+    expect(composition.targetOffsetZ).toBe(1.1);
+  });
+
+  it("places the camera close in front of the selected object", () => {
+    const composition = solveFocusComposition({
+      objectPosition: { x: 0.5, y: 0, z: 1.4 },
+      objectRadius: 1,
+      normalCameraDistance: 9
+    });
+    const gap = composition.cameraDistance - 1.4;
+    expect(gap).toBeGreaterThanOrEqual(1.15);
+    expect(gap).toBeLessThanOrEqual(3.1);
+    expect(composition.cameraDistance).toBeLessThan(9);
   });
 });
