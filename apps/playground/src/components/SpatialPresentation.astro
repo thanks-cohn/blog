@@ -45,6 +45,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   data-home-href={homeHref}
 >
   <canvas id="prism-rail-canvas" aria-label="Do It Your Way spatial presentation"></canvas>
+  <canvas id="glb-layer" aria-hidden="true"></canvas>
   <div class="sr-only" aria-live="polite" id="presentation-status"></div>
 </div>
 
@@ -76,6 +77,73 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
   const root = document.querySelector<HTMLElement>(".presentation[data-config]");
   const canvas = document.getElementById("prism-rail-canvas");
+  const glbCanvas = document.getElementById("glb-layer");
+
+  let threeRenderer: any = null;
+  let threeScene: any = null;
+  let threeCamera: any = null;
+  let threeModule: any = null;
+  let gltfLoader: any = null;
+  const threeObjects = new Map<string, any>();
+  const threeLoading = new Set<string>();
+
+  async function ensureThree() {
+    if (threeRenderer || !(glbCanvas instanceof HTMLCanvasElement)) return;
+    try {
+      const THREE = await import(/* @vite-ignore */ "https://esm.sh/three@0.180.0");
+      const loaderModule = await import(
+        /* @vite-ignore */
+        "https://esm.sh/three@0.180.0/examples/jsm/loaders/GLTFLoader.js"
+      );
+      threeModule = THREE;
+      threeScene = new THREE.Scene();
+      threeCamera = new THREE.PerspectiveCamera(50, 1, 0.05, 250);
+      threeRenderer = new THREE.WebGLRenderer({
+        canvas: glbCanvas,
+        alpha: true,
+        antialias: true
+      });
+      threeRenderer.setClearColor(0x000000, 0);
+      threeRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      threeScene.add(new THREE.HemisphereLight(0xffffff, 0x30343b, 2.2));
+      const key = new THREE.DirectionalLight(0xffffff, 2.6);
+      key.position.set(5, 8, 6);
+      threeScene.add(key);
+      gltfLoader = new loaderModule.GLTFLoader();
+    } catch (error) {
+      console.error("Unable to initialize GLB renderer", error);
+    }
+  }
+
+  function ensureThreeObject(obj: SceneObject) {
+    if (!obj.url || obj.kind !== "3d" || !gltfLoader || !threeScene || threeObjects.has(obj.id) || threeLoading.has(obj.id)) return;
+    threeLoading.add(obj.id);
+    gltfLoader.load(
+      obj.url,
+      (gltf: any) => {
+        const THREE = threeModule;
+        const root = gltf.scene;
+        const box = new THREE.Box3().setFromObject(root);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        const maxDimension = Math.max(size.x, size.y, size.z) || 1;
+        root.position.sub(center);
+        root.scale.setScalar(2 / maxDimension);
+
+        const group = new THREE.Group();
+        group.add(root);
+        group.visible = false;
+        threeScene.add(group);
+        threeObjects.set(obj.id, group);
+        threeLoading.delete(obj.id);
+      },
+      undefined,
+      (error: any) => {
+        threeLoading.delete(obj.id);
+        console.error(`Unable to load GLB asset ${obj.name}`, error);
+      }
+    );
+  }
 
   if (root && canvas instanceof HTMLCanvasElement) {
     const gameCanvas: HTMLCanvasElement = canvas;
@@ -124,6 +192,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       let draggedDistance = 0;
 
       const layouts = stations.map((station: any, index: number) => generateLayout(station, index));
+      void ensureThree().then(() => {
+        for (const layout of layouts) {
+          for (const obj of layout) ensureThreeObject(obj);
+        }
+      });
 
       function stationZ(index: number) {
         return -18 - index * spacing;
@@ -268,6 +341,15 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         }
 
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        if (threeRenderer && threeCamera) {
+          threeRenderer.setPixelRatio(dpr);
+          threeRenderer.setSize(width, height, false);
+          const focal = Math.min(width, height) * 0.92;
+          threeCamera.aspect = width / Math.max(1, height);
+          threeCamera.fov = 2 * Math.atan(height / (2 * focal)) * 180 / Math.PI;
+          threeCamera.updateProjectionMatrix();
+        }
       }
 
       function cameraPosition(): Vec3 {
@@ -434,10 +516,18 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             ctx.strokeStyle = "rgba(255,255,255,.28)";
             ctx.strokeRect(-size, -size * .72, size * 2, size * 1.44);
           }
-        } else if (!obj.url) {
+        } else if (obj.url) {
+          ensureThreeObject(obj);
+          const model = threeObjects.get(obj.id);
+          if (model) {
+            model.visible = true;
+            model.position.set(world.x, world.y, world.z);
+            model.rotation.set(0, obj.spin, 0);
+            model.scale.setScalar(obj.size);
+          }
+        } else {
           // No uploaded 3D asset exists for this slot, so render a mathematical
-          // proxy placeholder. Uploaded GLB/GLTF assets must never be replaced
-          // by proxy geometry.
+          // proxy placeholder. Uploaded GLB/GLTF assets are rendered by Three.js.
           ctx.rotate(obj.spin);
           if (obj.shape === 0) {
             const g = ctx.createRadialGradient(-size * .2, -size * .25, 0, 0, 0, size);
@@ -658,6 +748,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         update(now, dt);
 
         lastPaperRect = null;
+        for (const model of threeObjects.values()) model.visible = false;
         for (const layout of layouts) {
           for (const obj of layout) obj.lastScreen = undefined;
         }
@@ -670,6 +761,14 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           .sort((a: number, b: number) => stationZ(a) - stationZ(b));
 
         for (const index of drawOrder) drawStation(index, now);
+
+        if (threeRenderer && threeScene && threeCamera) {
+          const cam = cameraPosition();
+          threeCamera.position.set(cam.x, cam.y, cam.z);
+          threeCamera.rotation.order = "YXZ";
+          threeCamera.rotation.set(lookPitch, lookYaw, 0);
+          threeRenderer.render(threeScene, threeCamera);
+        }
 
         const vignette = ctx.createRadialGradient(
           width * .5, height * .5, Math.min(width, height) * .25,
@@ -809,6 +908,24 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     height:100%;
     touch-action:none;
     cursor:crosshair;
+  }
+
+  #prism-rail-canvas {
+    position:absolute;
+    inset:0;
+    z-index:1;
+  }
+
+  #glb-layer {
+    position:absolute;
+    inset:0;
+    z-index:2;
+    pointer-events:none;
+    background:transparent;
+  }
+
+  .sr-only {
+    z-index:3;
   }
 
   .sr-only {
