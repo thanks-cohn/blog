@@ -46,3 +46,38 @@ export function focusCameraDistance(args: {
     halfWidth / Math.max(0.01, tanH)
   );
 }
+
+
+export function solveFocusComposition(args: {
+  side: FocusSide;
+  objectRadius: number;
+  aspect: number;
+  normalCameraDistance: number;
+}) {
+  const anchor = focusObjectAnchor(args.side, args.objectRadius);
+  const distance = Math.max(
+    5.2,
+    Math.min(
+      args.normalCameraDistance * 0.9,
+      focusCameraDistance({
+        objectRadius: args.objectRadius,
+        objectX: anchor.x,
+        imageHalfWidth: 2.7,
+        imageHalfHeight: 2.95,
+        verticalFovDegrees: 50,
+        aspect: args.aspect,
+        padding: 0.6
+      })
+    )
+  );
+  const sign = args.side === "left" ? -1 : 1;
+
+  // Shift the lens slightly toward the featured object and aim between it
+  // and the image. This creates foreground subject + readable background art.
+  return {
+    anchor,
+    cameraOffsetX: sign * Math.min(1.15, Math.max(0.35, Math.abs(anchor.x) * 0.22)),
+    targetOffsetX: sign * Math.min(1.5, Math.max(0.45, Math.abs(anchor.x) * 0.34)),
+    cameraDistance: distance
+  };
+}
