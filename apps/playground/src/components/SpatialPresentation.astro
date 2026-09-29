@@ -80,13 +80,16 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     lastScreen?: { x: number; y: number; radius: number; depth: number };
   };
 
+  type CameraMode = "locked" | "focus" | "free";
   type PresentationSettingKey =
+    | "camera.mode"
     | "camera.mouseMovesCamera"
     | "assets.minDistanceFromCenter"
     | "assets.maxDistanceFromCenter";
-  type PresentationSettingValue = boolean | number;
+  type PresentationSettingValue = boolean | number | CameraMode;
   type PresentationSettingsSnapshot = {
     camera: {
+      mode: CameraMode;
       mouseMovesCamera: boolean;
     };
     assets: {
@@ -220,6 +223,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     );
     const settingDefaults: PresentationSettingsSnapshot = {
       camera: {
+        mode:
+          config.arrangement?.controls?.cameraMode === "focus" ||
+          config.arrangement?.controls?.cameraMode === "free"
+            ? config.arrangement.controls.cameraMode
+            : "locked",
         mouseMovesCamera: Boolean(config.arrangement?.controls?.mouseMovesCamera ?? false)
       },
       assets: {
@@ -231,7 +239,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
     function cloneSettings(source: PresentationSettingsSnapshot): PresentationSettingsSnapshot {
       return {
-        camera: { mouseMovesCamera: Boolean(source.camera.mouseMovesCamera) },
+        camera: {
+          mode: source.camera.mode,
+          mouseMovesCamera: Boolean(source.camera.mouseMovesCamera)
+        },
         assets: {
           minDistanceFromCenter: Number(source.assets.minDistanceFromCenter),
           maxDistanceFromCenter: Number(source.assets.maxDistanceFromCenter)
@@ -254,6 +265,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           : Math.max(minDistance, settingDefaults.assets.maxDistanceFromCenter);
         return {
           camera: {
+            mode:
+              parsed?.camera?.mode === "focus" || parsed?.camera?.mode === "free"
+                ? parsed.camera.mode
+                : "locked",
             mouseMovesCamera:
               typeof parsed?.camera?.mouseMovesCamera === "boolean"
                 ? parsed.camera.mouseMovesCamera
@@ -283,14 +298,20 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
     window.webrevPresentationSettings = {
       get(key?: PresentationSettingKey) {
+        if (key === "camera.mode") return presentationSettings.camera.mode;
         if (key === "camera.mouseMovesCamera") return presentationSettings.camera.mouseMovesCamera;
         if (key === "assets.minDistanceFromCenter") return presentationSettings.assets.minDistanceFromCenter;
         if (key === "assets.maxDistanceFromCenter") return presentationSettings.assets.maxDistanceFromCenter;
         return cloneSettings(presentationSettings);
       },
       set(key: PresentationSettingKey, value: PresentationSettingValue) {
-        if (key === "camera.mouseMovesCamera") {
+        if (key === "camera.mode") {
+          presentationSettings.camera.mode =
+            value === "focus" || value === "free" ? value : "locked";
+          presentationSettings.camera.mouseMovesCamera = presentationSettings.camera.mode !== "locked";
+        } else if (key === "camera.mouseMovesCamera") {
           presentationSettings.camera.mouseMovesCamera = Boolean(value);
+          presentationSettings.camera.mode = presentationSettings.camera.mouseMovesCamera ? "focus" : "locked";
         } else if (key === "assets.minDistanceFromCenter") {
           const next = Math.max(0, Number(value) || 0);
           presentationSettings.assets.minDistanceFromCenter = Math.min(
@@ -307,8 +328,14 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         return publishSettings();
       },
       reset(key?: PresentationSettingKey) {
+        if (!key || key === "camera.mode") {
+          presentationSettings.camera.mode = settingDefaults.camera.mode;
+        }
         if (!key || key === "camera.mouseMovesCamera") {
           presentationSettings.camera.mouseMovesCamera = settingDefaults.camera.mouseMovesCamera;
+        }
+        if (!key) {
+          presentationSettings.camera.mouseMovesCamera = presentationSettings.camera.mode !== "locked";
         }
         if (!key || key === "assets.minDistanceFromCenter") {
           presentationSettings.assets.minDistanceFromCenter = settingDefaults.assets.minDistanceFromCenter;
@@ -928,7 +955,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       }
 
       function update(now: number, dt: number) {
-        if (!presentationSettings.camera.mouseMovesCamera) {
+        if (presentationSettings.camera.mode === "locked") {
           targetYaw = 0;
           targetPitch = -0.02;
         }
@@ -955,7 +982,12 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         ctx.font = "12px ui-sans-serif, system-ui";
         ctx.fillText("PRISM RAIL / TOP FACE", 24, 50);
 
-        const mouseHint = presentationSettings.camera.mouseMovesCamera ? " · move mouse to look" : "";
+        const mouseHint =
+          presentationSettings.camera.mode === "locked"
+            ? ""
+            : presentationSettings.camera.mode === "focus"
+              ? " · move mouse to look"
+              : " · move mouse for free look";
         const hint = arrived()
           ? `Click the paper to present it · drag or toss floating objects${mouseHint} · ← → ride`
           : "Riding the thread…";
@@ -1061,11 +1093,22 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           return;
         }
 
-        if (presentationSettings.camera.mouseMovesCamera) {
+        if (presentationSettings.camera.mode !== "locked") {
           const nx = x / Math.max(1, rect.width) - .5;
           const ny = y / Math.max(1, rect.height) - .5;
-          targetYaw = nx * .34;
-          targetPitch = -ny * .20;
+
+          if (presentationSettings.camera.mode === "focus") {
+            // Limited look mode: keep the center image inside the viewport.
+            targetYaw = nx * .34;
+            targetPitch = -ny * .20;
+          } else {
+            // Free mode: full yaw rotation and a wide pitch range.
+            targetYaw = nx * Math.PI * 2;
+            targetPitch = Math.max(
+              -Math.PI * 0.49,
+              Math.min(Math.PI * 0.49, -ny * Math.PI)
+            );
+          }
         }
 
         const hover = findHitObject(x, y);
@@ -1085,7 +1128,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       gameCanvas.addEventListener("pointercancel", releasePointer);
 
       gameCanvas.addEventListener("pointerleave", () => {
-        if (!grabbed && presentationSettings.camera.mouseMovesCamera) {
+        if (!grabbed && presentationSettings.camera.mode === "focus") {
           targetYaw = 0;
           targetPitch = -0.02;
         }
