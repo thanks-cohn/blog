@@ -801,7 +801,13 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         });
         if (!projected) return;
 
-        const radius = Math.max(8, obj.size * projected.scale);
+        const baseRadius = Math.max(8, obj.size * projected.scale);
+        // 3D meshes can extend well beyond the nominal object center because their
+        // normalized bounds are later scaled in WebGL. Use a conservative screen
+        // radius so the complete model, not just its anchor point, stays visible.
+        const radius = obj.kind === "3d"
+          ? Math.max(baseRadius * 2.15, 28)
+          : baseRadius;
         const pad = presentationSettings.collisions.viewport.paddingPx;
         const minX = pad + radius;
         const maxX = width - pad - radius;
@@ -824,6 +830,31 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const worldPerPixel = 1 / Math.max(projected.scale, 0.0001);
         obj.local.x += correctionX * worldPerPixel;
         obj.local.y -= correctionY * worldPerPixel;
+
+        // Perspective can slightly change after the first correction. Clamp once
+        // more against the same screen envelope so fast-moving objects cannot
+        // tunnel past the edge between frames.
+        const corrected = project({
+          x: center.x + obj.local.x,
+          y: center.y + obj.local.y,
+          z: center.z + obj.local.z
+        });
+        if (corrected) {
+          const correctedRadius = obj.kind === "3d"
+            ? Math.max(Math.max(8, obj.size * corrected.scale) * 2.15, 28)
+            : Math.max(8, obj.size * corrected.scale);
+          const correctedMinX = pad + correctedRadius;
+          const correctedMaxX = width - pad - correctedRadius;
+          const correctedMinY = pad + correctedRadius;
+          const correctedMaxY = height - pad - correctedRadius;
+          const correctedWorldPerPixel = 1 / Math.max(corrected.scale, 0.0001);
+
+          if (corrected.x < correctedMinX) obj.local.x += (correctedMinX - corrected.x) * correctedWorldPerPixel;
+          else if (corrected.x > correctedMaxX) obj.local.x += (correctedMaxX - corrected.x) * correctedWorldPerPixel;
+
+          if (corrected.y < correctedMinY) obj.local.y -= (correctedMinY - corrected.y) * correctedWorldPerPixel;
+          else if (corrected.y > correctedMaxY) obj.local.y -= (correctedMaxY - corrected.y) * correctedWorldPerPixel;
+        }
 
         if (correctionX !== 0) obj.velocity.x *= -restitution;
         if (correctionY !== 0) obj.velocity.y *= -restitution;
