@@ -40,11 +40,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
 <div
   class="presentation"
-  data-webrev-id="presentation.uniqueness-rewarded"
+  data-webrev-id="presentation.do-it-your-way"
   data-config={JSON.stringify(runtimeConfig)}
   data-home-href={homeHref}
 >
-  <canvas id="prism-rail-canvas" aria-label="Design it Your Way spatial presentation"></canvas>
+  <canvas id="prism-rail-canvas" aria-label="Do It Your Way spatial presentation"></canvas>
   <div class="sr-only" aria-live="polite" id="presentation-status"></div>
 </div>
 
@@ -615,10 +615,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         ctx.save();
         ctx.fillStyle = "rgba(255,255,255,.88)";
         ctx.font = "600 14px ui-sans-serif, system-ui";
-        ctx.fillText("Design it Your Way", 24, 30);
+        ctx.fillText("Do It Your Way", 24, 30);
         ctx.fillStyle = "rgba(255,255,255,.48)";
         ctx.font = "12px ui-sans-serif, system-ui";
-        ctx.fillText("UNIQUENESS-REWARDED · PRISM RAIL / TOP FACE", 24, 50);
+        ctx.fillText("PRISM RAIL / TOP FACE", 24, 50);
 
         const hint = arrived()
           ? "Click the paper to present it · drag or toss floating objects · move mouse to look · ← → ride"
