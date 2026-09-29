@@ -134,7 +134,6 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
     type SpatialEnvelopeConfig
   } from "../lib/spatialEnvelope";
   import {
-    chooseFocusSide,
     solveFocusComposition,
     type FocusSide
   } from "../lib/focusExperience";
@@ -1542,13 +1541,15 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         stationIndex: number;
         object: SceneObject;
         side: FocusSide;
-        anchor: Vec3;
-        startLocal: Vec3;
+        baseLocal: Vec3;
         startSpin: number;
         startedAt: number;
+        settled: boolean;
         cameraDistance: number;
         cameraOffsetX: number;
+        cameraOffsetY: number;
         targetOffsetX: number;
+        targetOffsetY: number;
         textSide: "left" | "right";
         cameraStart: Vec3;
       };
@@ -2319,7 +2320,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           const eased = 1 - Math.pow(1 - t, 3);
           const end = {
             x: center.x + focusExperience.cameraOffsetX,
-            y: center.y + 0.18,
+            y: center.y + focusExperience.cameraOffsetY,
             z: center.z + focusExperience.cameraDistance
           };
           return {
@@ -2839,18 +2840,18 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
 
             if (activeFocus) {
               const elapsed = Math.max(0, now - activeFocus.startedAt);
-              const settle = Math.min(1, elapsed / 1350);
-              const eased = 1 - Math.pow(1 - settle, 3);
               const bob = Math.sin(elapsed * 0.001 * 1.35 + obj.phase) * 0.12;
 
+              // Focus never relocates the selected object. It freezes the
+              // object's translational position at the point the visitor chose,
+              // while preserving a small presentation bob and slow spin.
               obj.local = {
-                x: activeFocus.startLocal.x + (activeFocus.anchor.x - activeFocus.startLocal.x) * eased,
-                y: activeFocus.startLocal.y + (activeFocus.anchor.y - activeFocus.startLocal.y) * eased + bob,
-                z: activeFocus.startLocal.z + (activeFocus.anchor.z - activeFocus.startLocal.z) * eased
+                x: activeFocus.baseLocal.x,
+                y: activeFocus.baseLocal.y + bob,
+                z: activeFocus.baseLocal.z
               };
               obj.velocity = { x: 0, y: 0, z: 0 };
               obj.spin = activeFocus.startSpin + elapsed * 0.00018;
-              solveObjectBounds(stationIndex, obj);
               continue;
             }
 
@@ -3194,11 +3195,11 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
       function beginFocusExperience(obj: SceneObject) {
         const stationIndex = arrivingAt;
         const radius = objectBodyRadius(obj);
-        const side = chooseFocusSide(obj.local.x);
         const aspect = Math.max(0.5, width / Math.max(1, height));
         const normalCamera = cameraPosition();
+        const baseLocal = { ...obj.local };
         const composition = solveFocusComposition({
-          side,
+          objectPosition: baseLocal,
           objectRadius: radius,
           aspect,
           normalCameraDistance: presentationSettings.camera.distanceFromCenter
@@ -3207,14 +3208,16 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         focusExperience = {
           stationIndex,
           object: obj,
-          side,
-          anchor: composition.anchor,
-          startLocal: { ...obj.local },
+          side: composition.side,
+          baseLocal,
           startSpin: obj.spin,
           startedAt: performance.now(),
+          settled: false,
           cameraDistance: composition.cameraDistance,
           cameraOffsetX: composition.cameraOffsetX,
+          cameraOffsetY: composition.cameraOffsetY,
           targetOffsetX: composition.targetOffsetX,
+          targetOffsetY: composition.targetOffsetY,
           textSide: composition.textSide,
           cameraStart: { ...normalCamera }
         };
@@ -3226,7 +3229,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
       function endFocusExperience() {
         if (!focusExperience) return;
         const obj = focusExperience.object;
-        obj.anchor = { ...obj.local };
+        obj.local = { ...focusExperience.baseLocal };
         obj.velocity = { x: 0, y: 0, z: 0 };
         focusExperience = null;
         targetYaw = 0;
@@ -3243,12 +3246,25 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           const cam = cameraPosition();
           const target = {
             x: center.x + focusExperience.targetOffsetX,
-            y: center.y,
-            z: center.z + Math.max(0.08, focusExperience.anchor.z * 0.18)
+            y: center.y + focusExperience.targetOffsetY,
+            z: center.z + Math.max(0.05, focusExperience.baseLocal.z * 0.14)
           };
           const angles = lookAnglesAt(target, cam);
           targetYaw = angles.yaw;
           targetPitch = angles.pitch;
+
+          if (!focusExperience.settled && now - focusExperience.startedAt >= 1450) {
+            focusExperience.settled = true;
+            window.dispatchEvent(new CustomEvent("webrev:focus-experience-settled", {
+              detail: {
+                stationId: activeStationId,
+                objectId: focusExperience.object.id,
+                objectName: focusExperience.object.name,
+                side: focusExperience.side,
+                textSide: focusExperience.textSide
+              }
+            }));
+          }
         } else if (presentationSettings.camera.mode === "locked") {
           targetYaw = 0;
           targetPitch = 0;
@@ -3282,7 +3298,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
               ? " · move mouse to look"
               : " · move mouse for free look";
         const hint = focusExperience && focusExperience.stationIndex === arrivingAt
-          ? `COME INTO OUR WORLD · ${focusExperience.object.name} · Esc to return`
+          ? focusExperience.settled
+            ? `COME INTO OUR WORLD · ${focusExperience.object.name} · right-click to Leave for now <3`
+            : `COMING CLOSER · ${focusExperience.object.name}`
           : arrived()
           ? presentationSettings.editor.mode === "hemisphere"
             ? `HEMISPHERE EDITOR · ${presentationSettings.editor.hemisphere.toUpperCase()} · right-click for cameras/reposition`
@@ -3331,8 +3349,8 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
             const center = stationCenter(arrivingAt);
             const target = {
               x: center.x + focusExperience.targetOffsetX,
-              y: center.y,
-              z: center.z + Math.max(0.08, focusExperience.anchor.z * 0.18)
+              y: center.y + focusExperience.targetOffsetY,
+              z: center.z + Math.max(0.05, focusExperience.baseLocal.z * 0.14)
             };
             const basis = screenBasis(target, cam);
             const T3: any = THREE;
@@ -3415,13 +3433,13 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         if (!editContextMenu) return;
         editContextMenu.replaceChildren();
 
-        if (!obj || obj.kind !== "3d") {
+        if (focusExperience && focusExperience.stationIndex === arrivingAt) {
+          addEditContextAction("Leave for now <3", () => endFocusExperience());
+        } else if (!obj || obj.kind !== "3d") {
           const heading = document.createElement("div");
           heading.className = "edit-context-heading";
           heading.textContent = "Come Into Our World";
           editContextMenu.appendChild(heading);
-        } else if (focusExperience?.object === obj) {
-          addEditContextAction("Return to the World", () => endFocusExperience());
         } else {
           addEditContextAction("Come Into Our World", () => requestFocusExperience(obj));
         }
@@ -3501,13 +3519,6 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           openEditContextMenu(event.clientX, event.clientY, obj);
         } else {
           openExperienceContextMenu(event.clientX, event.clientY, obj);
-        }
-      });
-
-      window.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && focusExperience) {
-          endFocusExperience();
-          closeEditContextMenu();
         }
       });
 
