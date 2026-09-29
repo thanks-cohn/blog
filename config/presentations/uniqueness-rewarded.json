@@ -88,6 +88,9 @@
         "enabled": false,
         "objectName": ""
       }
+    },
+    "initialPlacement": {
+      "keepViewerImageSightlineClear": true
     }
   },
   "stations": [
