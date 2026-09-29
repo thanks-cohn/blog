@@ -62,7 +62,8 @@
       "hideBehindImage": true
     },
     "controls": {
-      "mouseMovesCamera": false
+      "mouseMovesCamera": false,
+      "cameraMode": "locked"
     },
     "assetRange": {
       "minDistanceFromCenter": 4.2,
