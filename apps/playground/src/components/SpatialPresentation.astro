@@ -251,20 +251,12 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       set(key: PresentationSettingKey, value: boolean) {
         if (key === "camera.mouseMovesCamera") {
           presentationSettings.camera.mouseMovesCamera = Boolean(value);
-          if (!presentationSettings.camera.mouseMovesCamera) {
-            targetYaw = 0;
-            targetPitch = -0.02;
-          }
         }
         return publishSettings();
       },
       reset(key?: PresentationSettingKey) {
         if (!key || key === "camera.mouseMovesCamera") {
           presentationSettings.camera.mouseMovesCamera = settingDefaults.camera.mouseMovesCamera;
-          if (!presentationSettings.camera.mouseMovesCamera) {
-            targetYaw = 0;
-            targetPitch = -0.02;
-          }
         }
         return publishSettings();
       },
@@ -861,6 +853,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       }
 
       function update(now: number, dt: number) {
+        if (!presentationSettings.camera.mouseMovesCamera) {
+          targetYaw = 0;
+          targetPitch = -0.02;
+        }
+
         const dz = targetZ - cameraZ;
         if (Math.abs(dz) > 0.04) {
           cameraZ += Math.sign(dz) * Math.min(Math.abs(dz), rideSpeed * dt);
