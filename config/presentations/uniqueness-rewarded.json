@@ -108,7 +108,8 @@
       "asset3d": {
         "layer": "near",
         "hideBehindImage": false
-      }
+      },
+      "centerImage": "first-light-center.jpg"
     },
     {
       "id": "blue-room",
