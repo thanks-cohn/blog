@@ -28,11 +28,6 @@
       "padding": 1.1,
       "rule": "decor-must-remain-outside"
     },
-    "influenceSphere": {
-      "radius": 6.4,
-      "innerRadius": 4.2,
-      "defaultObjectCount": 12
-    },
     "assetNaming": "<artworkName>-<number>.<ext>",
     "assetDirectories": {
       "2d": "apps/playground/src/assets/2d-assets",
@@ -61,32 +56,32 @@
       "layer": "middle",
       "hideBehindImage": true
     },
-    "controls": {
-      "mouseMovesCamera": false,
-      "cameraMode": "locked"
-    },
-    "assetRange": {
-      "minDistanceFromCenter": 4.2,
-      "maxDistanceFromCenter": 6.4,
-      "sphereDiameter": 12.8,
-      "frontDiameter": 12.8,
-      "backDiameter": 12.8
-    },
-    "collisions": {
-      "viewport": {
-        "enabled": true,
-        "restitution": 0.72,
-        "paddingPx": 18
-      },
-      "sphereInside": {
-        "enabled": true,
-        "boundary": "outer-surface",
-        "restitution": 0.5
-      }
-    },
     "assetHemisphere": {
       "enabled": true,
-      "defaultSide": "front"
+      "defaultSide": "front",
+      "plane": "image"
+    },
+    "sphere": {
+      "center": "image",
+      "diameter": 12.8,
+      "radius": 6.4,
+      "circumference": 40.21238596594935,
+      "defaultObjectCount": 12,
+      "halves": [
+        "front",
+        "back"
+      ],
+      "collision": {
+        "enabled": true,
+        "restitution": 0.5,
+        "rule": "assets-must-remain-inside-assigned-half"
+      }
+    },
+    "camera": {
+      "placement": "outside",
+      "distanceFromCenter": 9.088,
+      "mode": "locked",
+      "lookAt": "image-center"
     }
   },
   "stations": [
