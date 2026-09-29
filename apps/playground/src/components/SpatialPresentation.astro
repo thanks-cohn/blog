@@ -93,6 +93,23 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
 
     <div id="api-settings-controls" class="api-settings-controls"></div>
 
+    <section class="sphere-side-section" aria-labelledby="focus-song-pairing-title">
+      <div class="sphere-side-title" id="focus-song-pairing-title">GLB focus song</div>
+      <label class="sphere-asset-add">
+        <span>GLB object</span>
+        <select id="focus-song-glb-picker">
+          <option value="">Choose a GLB…</option>
+        </select>
+      </label>
+      <label class="sphere-asset-add">
+        <span>Song</span>
+        <select id="focus-song-track-picker" disabled>
+          <option value="">Choose a song…</option>
+        </select>
+      </label>
+      <div id="focus-song-pairing-status" class="sphere-size-readout"></div>
+    </section>
+
     <label class="sphere-asset-add">
       <span>Add / restore asset</span>
       <select id="sphere-asset-picker">
@@ -327,6 +344,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
   const stationSettingsTitle = document.getElementById("station-settings-title");
   const apiSettingsControls = document.getElementById("api-settings-controls");
   const assetPicker = document.getElementById("sphere-asset-picker") as HTMLSelectElement | null;
+  const focusSongGlbPicker = document.getElementById("focus-song-glb-picker") as HTMLSelectElement | null;
+  const focusSongTrackPicker = document.getElementById("focus-song-track-picker") as HTMLSelectElement | null;
+  const focusSongPairingStatus = document.getElementById("focus-song-pairing-status") as HTMLElement | null;
   const frontAssetsList = document.getElementById("front-assets-list");
   const backAssetsList = document.getElementById("back-assets-list");
   const editContextMenu = document.getElementById("edit-context-menu") as HTMLDivElement | null;
@@ -2032,6 +2052,66 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         return row;
       }
 
+      function renderFocusSongPairing() {
+        const api = window.webrevPresentationSettings;
+        if (!api || !focusSongGlbPicker || !focusSongTrackPicker) return;
+
+        const currentGlb = focusSongGlbPicker.value;
+        const glbs = api
+          .listAssets(activeStationId)
+          .filter((asset) => asset.kind === "3d" && asset.uploaded);
+
+        focusSongGlbPicker.replaceChildren();
+        const glbPrompt = document.createElement("option");
+        glbPrompt.value = "";
+        glbPrompt.textContent = glbs.length ? "Choose a GLB…" : "No GLBs in this level";
+        focusSongGlbPicker.appendChild(glbPrompt);
+
+        for (const glb of glbs) {
+          const option = document.createElement("option");
+          option.value = glb.name;
+          option.textContent = glb.name;
+          option.selected = glb.name === currentGlb;
+          focusSongGlbPicker.appendChild(option);
+        }
+
+        if (currentGlb && !glbs.some((glb) => glb.name === currentGlb)) {
+          focusSongGlbPicker.value = "";
+        }
+
+        const selectedGlb = focusSongGlbPicker.value;
+        const assigned = selectedGlb
+          ? api.getAssetFocusAudio(selectedGlb)?.track ?? ""
+          : "";
+
+        focusSongTrackPicker.replaceChildren();
+        const trackPrompt = document.createElement("option");
+        trackPrompt.value = "";
+        trackPrompt.textContent = selectedGlb
+          ? (config.musicTracks?.length ? "No song / use fallback" : "No songs in assets/music")
+          : "Pick a GLB first";
+        focusSongTrackPicker.appendChild(trackPrompt);
+
+        for (const track of Array.isArray(config.musicTracks) ? config.musicTracks : []) {
+          const option = document.createElement("option");
+          option.value = String(track.name);
+          option.textContent = String(track.name);
+          option.selected = assigned === track.name;
+          focusSongTrackPicker.appendChild(option);
+        }
+
+        focusSongTrackPicker.disabled = !selectedGlb;
+        focusSongTrackPicker.value = assigned;
+
+        if (focusSongPairingStatus) {
+          focusSongPairingStatus.textContent = selectedGlb
+            ? assigned
+              ? `${selectedGlb} → ${assigned}`
+              : `${selectedGlb} → no song assigned`
+            : "Pick a GLB, then choose its song.";
+        }
+      }
+
       function renderSphereSettings() {
         if (!frontAssetsList || !backAssetsList || !assetPicker || !sphereSizeReadout) return;
         const api = window.webrevPresentationSettings;
@@ -2046,6 +2126,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           `Radius ${snapshot.sphere.radius.toFixed(2)} · collision boundary = sphere surface`;
 
         renderApiSettingsControls();
+        renderFocusSongPairing();
 
         frontAssetsList.replaceChildren();
         backAssetsList.replaceChildren();
@@ -2093,6 +2174,17 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         window.webrevPresentationSettings?.setAssetVisible(name, true);
         assetPicker.value = "";
       });
+      focusSongGlbPicker?.addEventListener("change", () => {
+        renderFocusSongPairing();
+      });
+      focusSongTrackPicker?.addEventListener("change", () => {
+        const name = focusSongGlbPicker?.value ?? "";
+        if (!name) return;
+        window.webrevPresentationSettings?.setAssetFocusAudio(name, {
+          track: focusSongTrackPicker.value
+        });
+        renderFocusSongPairing();
+      });
       window.addEventListener("webrev:presentation-settings", () => {
         stationSettings[activeStationId] = presentationSettings;
         targetZ = stationZ(arrivingAt) + presentationSettings.camera.distanceFromCenter;
@@ -2104,6 +2196,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       });
       window.addEventListener("webrev:asset-runtime-status", () => {
         if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
+      });
+      window.addEventListener("webrev:asset-focus-audio", () => {
+        if (settingsPanel && !settingsPanel.hidden) renderFocusSongPairing();
       });
       window.addEventListener("webrev:asset-motion", () => {
         for (const layout of layouts) {
