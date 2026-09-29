@@ -67,7 +67,8 @@
     },
     "assetRange": {
       "minDistanceFromCenter": 4.2,
-      "maxDistanceFromCenter": 6.4
+      "maxDistanceFromCenter": 6.4,
+      "sphereDiameter": 12.8
     },
     "collisions": {
       "viewport": {
