@@ -99,7 +99,8 @@
       "enabled": true,
       "track": "",
       "volume": 0.78,
-      "fadeInMs": 1100
+      "fadeInMs": 1100,
+      "fadeOutMs": 1800
     }
   },
   "stations": [
