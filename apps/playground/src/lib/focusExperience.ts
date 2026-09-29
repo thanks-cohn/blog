@@ -54,6 +54,48 @@ export function solveFocusComposition(args: {
   aspect: number;
   normalCameraDistance: number;
 }) {
+  const radius = Math.max(0.05, Number(args.objectRadius) || 0.05);
+  const sign = args.side === "left" ? -1 : 1;
+
+  // Hero composition: the focused object owns the shot, sitting near center
+  // with only a modest lateral bias. The opposite side is reserved for text.
+  const heroOffsetX = sign * Math.min(1.45, Math.max(0.72, radius * 0.9));
+  const anchor = {
+    x: heroOffsetX,
+    y: 0.05,
+    z: Math.max(0.55, radius * 0.62)
+  };
+
+  // Move closer than the normal station camera so the selected object is
+  // foreground-dominant, but retain enough distance to keep most of the
+  // 5.4 x 5.9 main picture visible behind it.
+  const baseDistance = focusCameraDistance({
+    objectRadius: radius,
+    objectX: anchor.x,
+    imageHalfWidth: 2.7,
+    imageHalfHeight: 2.95,
+    verticalFovDegrees: 50,
+    aspect: args.aspect,
+    padding: 0.3
+  });
+
+  const distance = Math.max(
+    4.4,
+    Math.min(args.normalCameraDistance * 0.78, baseDistance * 0.9)
+  );
+
+  return {
+    anchor,
+    // Slight lens offset produces depth/parallax without pushing the subject
+    // out of the visual center.
+    cameraOffsetX: sign * Math.min(0.65, Math.max(0.2, radius * 0.28)),
+    // Aim mostly at the object, not the image center.
+    targetOffsetX: sign * Math.min(1.15, Math.max(0.55, Math.abs(anchor.x) * 0.82)),
+    cameraDistance: distance,
+    // Explicit semantic slot for the future Star-Wars-style text plane.
+    textSide: args.side === "left" ? "right" : "left"
+  } as const;
+}) {
   const anchor = focusObjectAnchor(args.side, args.objectRadius);
   const distance = Math.max(
     5.2,
