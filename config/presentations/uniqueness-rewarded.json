@@ -82,6 +82,12 @@
       "distanceFromCenter": 9.088,
       "mode": "locked",
       "lookAt": "image-center"
+    },
+    "debug": {
+      "glbGlobe": {
+        "enabled": false,
+        "objectName": ""
+      }
     }
   },
   "stations": [
