@@ -133,6 +133,12 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
     spatialEnvelopeRadius,
     type SpatialEnvelopeConfig
   } from "../lib/spatialEnvelope";
+  import {
+    chooseFocusSide,
+    focusCameraDistance,
+    focusObjectAnchor,
+    type FocusSide
+  } from "../lib/focusExperience";
 
   type Vec3 = { x: number; y: number; z: number };
   type Projected = { x: number; y: number; depth: number; scale: number };
@@ -1247,7 +1253,17 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
             ? { mode: "hemisphere", hemisphere: "front", cameraPreset: "top", repositionObjectName: "" }
             : { mode: "none" };
         } else if (key === "editor.hemisphere") {
-          if (presentationSettings.editor.mode === "hemisphere") {
+          if (focusExperience && focusExperience.stationIndex === arrivingAt) {
+            const center = stationCenter(arrivingAt);
+            const basis = screenBasis(center, cam);
+            const T3: any = THREE;
+            const matrix = new T3.Matrix4().makeBasis(
+              new T3.Vector3(basis.right.x, basis.right.y, basis.right.z),
+              new T3.Vector3(basis.up.x, basis.up.y, basis.up.z),
+              new T3.Vector3(-basis.forward.x, -basis.forward.y, -basis.forward.z)
+            );
+            threeCamera.quaternion.setFromRotationMatrix(matrix);
+          } else if (presentationSettings.editor.mode === "hemisphere") {
             presentationSettings.editor.hemisphere = value === "back" ? "back" : "front";
           }
         } else if (key === "editor.cameraPreset") {
@@ -1532,6 +1548,19 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
       let dragLastY = 0;
       let dragLastTime = performance.now();
       let draggedDistance = 0;
+
+      type FocusExperienceState = {
+        stationIndex: number;
+        object: SceneObject;
+        side: FocusSide;
+        anchor: Vec3;
+        startLocal: Vec3;
+        startSpin: number;
+        startedAt: number;
+        cameraDistance: number;
+        cameraTarget: Vec3;
+      };
+      let focusExperience: FocusExperienceState | null = null;
 
       const layouts = stations.map((station: any, index: number) => generateLayout(station, index));
       ensureThree();
@@ -2291,6 +2320,15 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         const editPose = hemisphereEditorPose();
         if (editPose) return editPose.position;
 
+        if (focusExperience && focusExperience.stationIndex === arrivingAt) {
+          const center = stationCenter(arrivingAt);
+          return {
+            x: center.x,
+            y: center.y,
+            z: center.z + focusExperience.cameraDistance
+          };
+        }
+
         const center = stationCenter(arrivingAt);
         const animatedDistance = cameraZ - stationZ(arrivingAt);
         const distance = presentationSettings.camera.placement === "outside"
@@ -2726,11 +2764,13 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         // for a spatial hash later without changing callers.
         for (let i = 0; i < layout.length; i++) {
           const a = layout[i];
+          if (focusExperience?.object === a) continue;
           const configA = spatialEnvelopeConfigFor(a);
           if (!configA.collision.enabled) continue;
 
           for (let j = i + 1; j < layout.length; j++) {
             const b = layout[j];
+            if (focusExperience?.object === b) continue;
             const configB = spatialEnvelopeConfigFor(b);
             if (!configB.collision.enabled) continue;
 
@@ -2789,6 +2829,30 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           for (const obj of layout) {
             if (obj.visible === false) continue;
             if (grabbed?.object === obj) continue;
+
+            const activeFocus =
+              focusExperience &&
+              focusExperience.stationIndex === stationIndex &&
+              focusExperience.object === obj
+                ? focusExperience
+                : null;
+
+            if (activeFocus) {
+              const elapsed = Math.max(0, now - activeFocus.startedAt);
+              const settle = Math.min(1, elapsed / 1350);
+              const eased = 1 - Math.pow(1 - settle, 3);
+              const bob = Math.sin(elapsed * 0.001 * 1.35 + obj.phase) * 0.12;
+
+              obj.local = {
+                x: activeFocus.startLocal.x + (activeFocus.anchor.x - activeFocus.startLocal.x) * eased,
+                y: activeFocus.startLocal.y + (activeFocus.anchor.y - activeFocus.startLocal.y) * eased + bob,
+                z: activeFocus.startLocal.z + (activeFocus.anchor.z - activeFocus.startLocal.z) * eased
+              };
+              obj.velocity = { x: 0, y: 0, z: 0 };
+              obj.spin = activeFocus.startSpin + elapsed * 0.00018;
+              solveObjectBounds(stationIndex, obj);
+              continue;
+            }
 
             if (obj.motion.type === "fixed") {
               obj.velocity = { x: 0, y: 0, z: 0 };
@@ -3080,6 +3144,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
       }
 
       function requestStation(index: number) {
+        endFocusExperience();
         arrivingAt = Math.max(0, Math.min(stations.length - 1, index));
         activeStationId = stations[arrivingAt]?.id ?? activeStationId;
         presentationSettings =
@@ -3126,11 +3191,56 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         return null;
       }
 
+      function beginFocusExperience(obj: SceneObject) {
+        const stationIndex = arrivingAt;
+        const radius = objectBodyRadius(obj);
+        const side = chooseFocusSide(obj.local.x);
+        const anchor = focusObjectAnchor(side, radius);
+        const aspect = Math.max(0.5, width / Math.max(1, height));
+        const distance = focusCameraDistance({
+          objectRadius: radius,
+          objectX: anchor.x,
+          imageHalfWidth: 2.7,
+          imageHalfHeight: 2.95,
+          verticalFovDegrees: 50,
+          aspect,
+          padding: 0.55
+        });
+
+        focusExperience = {
+          stationIndex,
+          object: obj,
+          side,
+          anchor,
+          startLocal: { ...obj.local },
+          startSpin: obj.spin,
+          startedAt: performance.now(),
+          cameraDistance: Math.max(5.4, Math.min(distance, presentationSettings.camera.distanceFromCenter)),
+          cameraTarget: stationCenter(stationIndex)
+        };
+
+        targetYaw = 0;
+        targetPitch = 0;
+      }
+
+      function endFocusExperience() {
+        if (!focusExperience) return;
+        const obj = focusExperience.object;
+        obj.anchor = { ...obj.local };
+        obj.velocity = { x: 0, y: 0, z: 0 };
+        focusExperience = null;
+        targetYaw = 0;
+        targetPitch = 0;
+      }
+
       function update(now: number, dt: number) {
         const editPose = hemisphereEditorPose();
         if (editPose) {
           targetYaw = editPose.yaw;
           targetPitch = editPose.pitch;
+        } else if (focusExperience && focusExperience.stationIndex === arrivingAt) {
+          targetYaw = 0;
+          targetPitch = 0;
         } else if (presentationSettings.camera.mode === "locked") {
           targetYaw = 0;
           targetPitch = 0;
@@ -3163,7 +3273,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
             : presentationSettings.camera.mode === "focus"
               ? " · move mouse to look"
               : " · move mouse for free look";
-        const hint = arrived()
+        const hint = focusExperience && focusExperience.stationIndex === arrivingAt
+          ? `COME INTO OUR WORLD · ${focusExperience.object.name} · Esc to return`
+          : arrived()
           ? presentationSettings.editor.mode === "hemisphere"
             ? `HEMISPHERE EDITOR · ${presentationSettings.editor.hemisphere.toUpperCase()} · right-click for cameras/reposition`
             : presentationSettings.interaction.contextMenuMode === "edit"
@@ -3262,14 +3374,13 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
       }
 
       function requestFocusExperience(obj: SceneObject) {
-        // The public action is intentionally decoupled from the editor. Future
-        // camera/audio/text implementations can subscribe to this event without
-        // changing the right-click contract.
+        beginFocusExperience(obj);
         window.dispatchEvent(new CustomEvent("webrev:focus-experience-request", {
           detail: {
             stationId: activeStationId,
             objectId: obj.id,
             objectName: obj.name,
+            side: focusExperience?.side,
             action: "come-into-our-world"
           }
         }));
@@ -3285,6 +3396,8 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
           heading.className = "edit-context-heading";
           heading.textContent = "Come Into Our World";
           editContextMenu.appendChild(heading);
+        } else if (focusExperience?.object === obj) {
+          addEditContextAction("Return to the World", () => endFocusExperience());
         } else {
           addEditContextAction("Come Into Our World", () => requestFocusExperience(obj));
         }
@@ -3367,6 +3480,13 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
         }
       });
 
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && focusExperience) {
+          endFocusExperience();
+          closeEditContextMenu();
+        }
+      });
+
       window.addEventListener("pointerdown", (event) => {
         if (!editContextMenu || editContextMenu.hidden) return;
         if (event.target instanceof Node && editContextMenu.contains(event.target)) return;
@@ -3381,6 +3501,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resol
 
         const obj = findHitObject(pointerX, pointerY);
         if (obj) {
+          if (focusExperience?.object === obj) return;
           if (presentationSettings.editor.mode === "hemisphere") {
             if (presentationSettings.editor.repositionObjectName !== obj.name) return;
             if (obj.hemisphere !== presentationSettings.editor.hemisphere) return;
