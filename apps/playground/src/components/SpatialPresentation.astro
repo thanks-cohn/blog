@@ -47,6 +47,42 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   <canvas id="prism-rail-canvas" aria-label="Do It Your Way spatial presentation"></canvas>
   <canvas id="glb-layer" aria-hidden="true"></canvas>
   <div class="sr-only" aria-live="polite" id="presentation-status"></div>
+
+  <button
+    type="button"
+    id="sphere-settings-toggle"
+    class="sphere-settings-toggle"
+    aria-label="Sphere asset settings"
+    aria-expanded="false"
+    aria-controls="sphere-settings-panel"
+  >⚙</button>
+
+  <aside id="sphere-settings-panel" class="sphere-settings-panel" hidden>
+    <div class="sphere-settings-header">
+      <div>
+        <strong>Sphere assets</strong>
+        <div id="sphere-size-readout" class="sphere-size-readout"></div>
+      </div>
+      <button type="button" id="sphere-settings-close" class="sphere-settings-close" aria-label="Close settings">×</button>
+    </div>
+
+    <label class="sphere-asset-add">
+      <span>Add / restore asset</span>
+      <select id="sphere-asset-picker">
+        <option value="">Choose an asset…</option>
+      </select>
+    </label>
+
+    <section class="sphere-side-section" aria-labelledby="front-assets-title">
+      <div class="sphere-side-title" id="front-assets-title">Front</div>
+      <div id="front-assets-list" class="sphere-asset-list"></div>
+    </section>
+
+    <section class="sphere-side-section" aria-labelledby="back-assets-title">
+      <div class="sphere-side-title" id="back-assets-title">Back</div>
+      <div id="back-assets-list" class="sphere-asset-list"></div>
+    </section>
+  </aside>
 </div>
 
 <script>
@@ -77,6 +113,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     action?: AssetAction;
     depthLayer?: "near" | "middle" | "far";
     hideBehindImage?: boolean;
+    hemisphere?: "front" | "back";
+    visible?: boolean;
     lastScreen?: { x: number; y: number; radius: number; depth: number };
   };
 
@@ -91,6 +129,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     | "collisions.viewport.paddingPx"
     | "collisions.sphereInside.enabled";
   type PresentationSettingValue = boolean | number | CameraMode;
+  type AssetHemisphere = "front" | "back";
+  type AssetPlacementState = Record<string, { hemisphere: AssetHemisphere; visible: boolean }>;
   type PresentationSettingsSnapshot = {
     camera: {
       mode: CameraMode;
@@ -120,6 +160,9 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         set(key: PresentationSettingKey, value: PresentationSettingValue): PresentationSettingsSnapshot;
         reset(key?: PresentationSettingKey): PresentationSettingsSnapshot;
         subscribe(listener: SettingsListener): () => void;
+        listAssets(stationId?: string): Array<{ name: string; hemisphere: AssetHemisphere; visible: boolean }>;
+        setAssetHemisphere(name: string, hemisphere: AssetHemisphere): void;
+        setAssetVisible(name: string, visible: boolean): void;
       };
     }
   }
@@ -127,6 +170,13 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   const root = document.querySelector<HTMLElement>(".presentation[data-config]");
   const canvas = document.getElementById("prism-rail-canvas");
   const glbCanvas = document.getElementById("glb-layer");
+  const settingsToggle = document.getElementById("sphere-settings-toggle") as HTMLButtonElement | null;
+  const settingsPanel = document.getElementById("sphere-settings-panel") as HTMLElement | null;
+  const settingsClose = document.getElementById("sphere-settings-close") as HTMLButtonElement | null;
+  const sphereSizeReadout = document.getElementById("sphere-size-readout");
+  const assetPicker = document.getElementById("sphere-asset-picker") as HTMLSelectElement | null;
+  const frontAssetsList = document.getElementById("front-assets-list");
+  const backAssetsList = document.getElementById("back-assets-list");
 
   let threeRenderer: any = null;
   let threeScene: any = null;
@@ -226,6 +276,43 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     const gameCanvas: HTMLCanvasElement = canvas;
     const config = JSON.parse(root.dataset.config ?? "{}");
     const settingsStorageKey = "webrev:presentation-settings:v1";
+    const assetPlacementStorageKey = "webrev:asset-placement:v1";
+
+    function allDiscoveredAssets() {
+      const result: Array<{ name: string; stationId: string }> = [];
+      for (const station of Array.isArray(config.stations) ? config.stations : []) {
+        const assets = Array.isArray(config.assetsByArtwork?.[station.artworkName])
+          ? config.assetsByArtwork[station.artworkName]
+          : [];
+        for (const asset of assets) result.push({ name: asset.name, stationId: station.id });
+      }
+      return result;
+    }
+
+    function loadAssetPlacement(): AssetPlacementState {
+      let stored: any = {};
+      try {
+        stored = JSON.parse(window.localStorage.getItem(assetPlacementStorageKey) ?? "{}");
+      } catch {}
+      const state: AssetPlacementState = {};
+      for (const asset of allDiscoveredAssets()) {
+        const saved = stored?.[asset.name];
+        state[asset.name] = {
+          hemisphere: saved?.hemisphere === "back" ? "back" : "front",
+          visible: typeof saved?.visible === "boolean" ? saved.visible : true
+        };
+      }
+      return state;
+    }
+
+    let assetPlacement = loadAssetPlacement();
+
+    function saveAssetPlacement() {
+      try {
+        window.localStorage.setItem(assetPlacementStorageKey, JSON.stringify(assetPlacement));
+      } catch {}
+      window.dispatchEvent(new CustomEvent("webrev:asset-placement", { detail: assetPlacement }));
+    }
     const defaultMinDistance = Math.max(
       0,
       Number(config.arrangement?.assetRange?.minDistanceFromCenter ?? config.arrangement?.influenceSphere?.innerRadius ?? 4.2)
@@ -426,6 +513,31 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         settingsListeners.add(listener);
         listener(cloneSettings(presentationSettings));
         return () => settingsListeners.delete(listener);
+      },
+      listAssets(stationId?: string) {
+        const allowed = new Set(
+          allDiscoveredAssets()
+            .filter((asset) => !stationId || asset.stationId === stationId)
+            .map((asset) => asset.name)
+        );
+        return Object.entries(assetPlacement)
+          .filter(([name]) => allowed.has(name))
+          .map(([name, state]) => ({ name, ...state }));
+      },
+      setAssetHemisphere(name: string, hemisphere: AssetHemisphere) {
+        if (!assetPlacement[name]) return;
+        assetPlacement[name].hemisphere = hemisphere === "back" ? "back" : "front";
+        assetPlacement[name].visible = true;
+        saveAssetPlacement();
+        syncAssetPlacementToLayouts();
+        renderSphereSettings();
+      },
+      setAssetVisible(name: string, visible: boolean) {
+        if (!assetPlacement[name]) return;
+        assetPlacement[name].visible = Boolean(visible);
+        saveAssetPlacement();
+        syncAssetPlacementToLayouts();
+        renderSphereSettings();
       }
     };
 
@@ -484,6 +596,99 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       for (const layout of layouts) {
         for (const obj of layout) ensureThreeObject(obj);
       }
+
+      function makeAssetRow(obj: SceneObject) {
+        const row = document.createElement("div");
+        row.className = "sphere-asset-row";
+
+        const name = document.createElement("span");
+        name.className = "sphere-asset-name";
+        name.textContent = obj.name;
+
+        const side = document.createElement("select");
+        side.className = "sphere-side-select";
+        side.setAttribute("aria-label", `Placement for ${obj.name}`);
+        for (const value of ["front", "back"] as const) {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = value === "front" ? "Front" : "Back";
+          option.selected = obj.hemisphere === value;
+          side.appendChild(option);
+        }
+        side.addEventListener("change", () => {
+          window.webrevPresentationSettings?.setAssetHemisphere(
+            obj.name,
+            side.value === "back" ? "back" : "front"
+          );
+        });
+
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "sphere-asset-remove";
+        remove.setAttribute("aria-label", `Hide ${obj.name}`);
+        remove.textContent = "×";
+        remove.addEventListener("click", () => {
+          window.webrevPresentationSettings?.setAssetVisible(obj.name, false);
+        });
+
+        row.append(name, side, remove);
+        return row;
+      }
+
+      function renderSphereSettings() {
+        if (!frontAssetsList || !backAssetsList || !assetPicker || !sphereSizeReadout) return;
+        sphereSizeReadout.textContent =
+          `Sphere range: ${minAssetDistance().toFixed(1)} – ${maxAssetDistance().toFixed(1)} from image center`;
+
+        frontAssetsList.replaceChildren();
+        backAssetsList.replaceChildren();
+
+        const currentLayout = layouts[arrivingAt] ?? [];
+        const uploaded = currentLayout.filter((obj: SceneObject) => Boolean(obj.url));
+        const hidden = uploaded.filter((obj: SceneObject) => obj.visible === false);
+
+        for (const obj of uploaded.filter((obj: SceneObject) => obj.visible !== false && obj.hemisphere !== "back")) {
+          frontAssetsList.appendChild(makeAssetRow(obj));
+        }
+        for (const obj of uploaded.filter((obj: SceneObject) => obj.visible !== false && obj.hemisphere === "back")) {
+          backAssetsList.appendChild(makeAssetRow(obj));
+        }
+
+        assetPicker.replaceChildren();
+        const prompt = document.createElement("option");
+        prompt.value = "";
+        prompt.textContent = hidden.length ? "Choose an asset…" : "All assets are displayed";
+        assetPicker.appendChild(prompt);
+        for (const obj of hidden) {
+          const option = document.createElement("option");
+          option.value = obj.name;
+          option.textContent = obj.name;
+          assetPicker.appendChild(option);
+        }
+        assetPicker.disabled = hidden.length === 0;
+      }
+
+      settingsToggle?.addEventListener("click", () => {
+        if (!settingsPanel) return;
+        const open = settingsPanel.hidden;
+        settingsPanel.hidden = !open;
+        settingsToggle.setAttribute("aria-expanded", String(open));
+        if (open) renderSphereSettings();
+      });
+      settingsClose?.addEventListener("click", () => {
+        if (!settingsPanel) return;
+        settingsPanel.hidden = true;
+        settingsToggle?.setAttribute("aria-expanded", "false");
+      });
+      assetPicker?.addEventListener("change", () => {
+        const name = assetPicker.value;
+        if (!name) return;
+        window.webrevPresentationSettings?.setAssetHemisphere(name, "front");
+        window.webrevPresentationSettings?.setAssetVisible(name, true);
+        assetPicker.value = "";
+      });
+      window.addEventListener("webrev:presentation-settings", renderSphereSettings);
+      renderSphereSettings();
 
       function stationZ(index: number) {
         return -18 - index * spacing;
@@ -584,6 +789,27 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         return applyDepthLayer(position, layer);
       }
 
+      function enforceHemisphere(obj: SceneObject) {
+        if (!obj.url) return;
+        const magnitude = Math.max(Math.abs(obj.local.z), Math.max(0.45, minAssetDistance() * 0.2));
+        obj.local.z = obj.hemisphere === "back" ? -magnitude : magnitude;
+        if (obj.hemisphere === "back" && obj.velocity.z > 0) obj.velocity.z *= -1;
+        if (obj.hemisphere !== "back" && obj.velocity.z < 0) obj.velocity.z *= -1;
+      }
+
+      function syncAssetPlacementToLayouts() {
+        if (typeof layouts === "undefined") return;
+        for (const layout of layouts) {
+          for (const obj of layout) {
+            if (!obj.url) continue;
+            const state = assetPlacement[obj.name] ?? { hemisphere: "front" as AssetHemisphere, visible: true };
+            obj.hemisphere = state.hemisphere;
+            obj.visible = state.visible;
+            enforceHemisphere(obj);
+          }
+        }
+      }
+
       function generateLayout(station: any, index: number): SceneObject[] {
         const rand = rngFor(station, index);
         const discovered = Array.isArray(assetsByArtwork[station.artworkName])
@@ -633,8 +859,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             phase: rand() * Math.PI * 2,
             action: asset ? assetActions[asset.name] : undefined,
             depthLayer: kind === "3d" ? threeSettings.layer : undefined,
-            hideBehindImage: kind === "3d" ? threeSettings.hideBehindImage : undefined
+            hideBehindImage: kind === "3d" ? threeSettings.hideBehindImage : undefined,
+            hemisphere: asset ? (assetPlacement[asset.name]?.hemisphere ?? "front") : "front",
+            visible: asset ? (assetPlacement[asset.name]?.visible ?? true) : true
           };
+          enforceHemisphere(obj);
 
           if (kind === "2d" && asset?.url) {
             const image = new Image();
@@ -869,6 +1098,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           const layout = layouts[stationIndex];
           const center = stationCenter(stationIndex);
           for (const obj of layout) {
+            if (obj.visible === false) continue;
             if (grabbed?.object === obj) continue;
             obj.velocity.x *= damping;
             obj.velocity.y *= damping;
@@ -881,6 +1111,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             obj.local.x += obj.velocity.x * dt;
             obj.local.y += obj.velocity.y * dt;
             obj.local.z += obj.velocity.z * dt;
+            enforceHemisphere(obj);
 
             if (obj.kind === "3d") obj.spin += obj.spinVelocity * dt;
             if (presentationSettings.collisions.sphereInside.enabled) {
@@ -892,6 +1123,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       }
 
       function drawSceneObject(center: Vec3, obj: SceneObject, alpha: number, now: number) {
+        if (obj.visible === false) {
+          obj.lastScreen = undefined;
+          return;
+        }
         const world = {
           x: center.x + obj.local.x,
           y: center.y + obj.local.y,
@@ -1009,7 +1244,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
         const alpha = Math.max(.12, Math.min(1, 1 - cp.depth / 60));
         const station3dSettings = resolve3dSettings(station);
-        if (station3dSettings.hideBehindImage) ensureImageOccluder(index, center);
+        const hasVisibleBackAsset = layouts[index].some(
+          (obj: SceneObject) => obj.url && obj.visible !== false && obj.hemisphere === "back"
+        );
+        if (station3dSettings.hideBehindImage || hasVisibleBackAsset) ensureImageOccluder(index, center);
         for (const obj of layouts[index]) drawSceneObject(center, obj, alpha * .84, now);
 
         const colors = themeColors(station.theme);
@@ -1088,6 +1326,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         paperTextOverride = null;
         lastPaperRect = null;
         status && (status.textContent = `Traveling to ${stations[arrivingAt].label}`);
+        renderSphereSettings();
       }
 
       function executeAction(action: AssetAction | undefined) {
@@ -1114,7 +1353,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
       function findHitObject(x: number, y: number) {
         const objects = layouts[arrivingAt]
-          .filter((obj: SceneObject) => obj.lastScreen)
+          .filter((obj: SceneObject) => obj.visible !== false && obj.lastScreen)
           .sort((a: SceneObject, b: SceneObject) => (a.lastScreen?.depth ?? 999) - (b.lastScreen?.depth ?? 999));
 
         for (const obj of objects) {
@@ -1368,6 +1607,135 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     z-index:2;
     pointer-events:none;
     background:transparent;
+  }
+
+  .sphere-settings-toggle {
+    position:absolute;
+    z-index:4;
+    top:18px;
+    right:18px;
+    width:44px;
+    height:44px;
+    border:1px solid rgba(255,255,255,.22);
+    border-radius:12px;
+    background:rgba(7,9,12,.78);
+    color:#fff;
+    font-size:20px;
+    cursor:pointer;
+    backdrop-filter:blur(10px);
+  }
+
+  .sphere-settings-panel {
+    position:absolute;
+    z-index:5;
+    top:72px;
+    right:18px;
+    width:min(360px, calc(100vw - 36px));
+    max-height:calc(100vh - 96px);
+    overflow:auto;
+    box-sizing:border-box;
+    padding:16px;
+    border:1px solid rgba(255,255,255,.18);
+    border-radius:16px;
+    background:rgba(8,10,14,.94);
+    color:#f4f6f8;
+    font:14px/1.35 ui-sans-serif,system-ui;
+    backdrop-filter:blur(14px);
+  }
+
+  .sphere-settings-panel[hidden] { display:none; }
+
+  .sphere-settings-header {
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:12px;
+    margin-bottom:16px;
+  }
+
+  .sphere-size-readout {
+    margin-top:4px;
+    color:rgba(255,255,255,.58);
+    font-size:12px;
+  }
+
+  .sphere-settings-close,
+  .sphere-asset-remove {
+    border:0;
+    background:transparent;
+    color:#fff;
+    cursor:pointer;
+  }
+
+  .sphere-settings-close {
+    width:32px;
+    height:32px;
+    font-size:22px;
+  }
+
+  .sphere-asset-add {
+    display:grid;
+    gap:6px;
+    margin-bottom:16px;
+    color:rgba(255,255,255,.7);
+    font-size:12px;
+  }
+
+  .sphere-asset-add select,
+  .sphere-side-select {
+    min-height:38px;
+    border:1px solid rgba(255,255,255,.16);
+    border-radius:9px;
+    background:#15191f;
+    color:#fff;
+    padding:0 10px;
+  }
+
+  .sphere-side-section + .sphere-side-section { margin-top:16px; }
+
+  .sphere-side-title {
+    margin-bottom:7px;
+    color:rgba(255,255,255,.64);
+    font-size:11px;
+    font-weight:700;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+  }
+
+  .sphere-asset-list {
+    display:grid;
+    gap:7px;
+  }
+
+  .sphere-asset-row {
+    display:grid;
+    grid-template-columns:minmax(0,1fr) 92px 34px;
+    align-items:center;
+    gap:8px;
+    min-height:42px;
+    padding:6px 7px 6px 10px;
+    border:1px solid rgba(255,255,255,.1);
+    border-radius:10px;
+    background:rgba(255,255,255,.045);
+  }
+
+  .sphere-asset-name {
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+  }
+
+  .sphere-asset-remove {
+    width:34px;
+    height:34px;
+    border-radius:8px;
+    font-size:19px;
+  }
+
+  .sphere-asset-remove:hover,
+  .sphere-settings-close:hover,
+  .sphere-settings-toggle:hover {
+    background:rgba(255,255,255,.1);
   }
 
   .sr-only {
