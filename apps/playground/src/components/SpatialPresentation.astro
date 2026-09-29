@@ -89,6 +89,14 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       </select>
     </label>
 
+    <label class="sphere-viewport-toggle">
+      <input id="viewport-containment-toggle" type="checkbox" />
+      <span>
+        <strong>Keep assets in viewport</strong>
+        <small>Second rule: visible geometry cannot leave the screen.</small>
+      </span>
+    </label>
+
     <label class="sphere-asset-add">
       <span>Add / restore asset</span>
       <select id="sphere-asset-picker">
@@ -163,7 +171,9 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     | "sphere.diameter"
     | "sphere.radius"
     | "sphere.circumference"
-    | "sphere.restitution";
+    | "sphere.restitution"
+    | "viewport.enabled"
+    | "viewport.paddingPx";
   type PresentationSettingValue = boolean | number | string;
   type AssetHemisphere = "front" | "back";
   type AssetPlacementState = Record<string, { hemisphere: AssetHemisphere; visible: boolean }>;
@@ -178,6 +188,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       radius: number;
       circumference: number;
       restitution: number;
+    };
+    viewport: {
+      enabled: boolean;
+      paddingPx: number;
     };
   };
   type SettingsListener = (settings: PresentationSettingsSnapshot) => void;
@@ -207,6 +221,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   const sphereDiameterInput = document.getElementById("sphere-diameter-input") as HTMLInputElement | null;
   const sphereCircumferenceInput = document.getElementById("sphere-circumference-input") as HTMLInputElement | null;
   const cameraPlacementSelect = document.getElementById("camera-placement-select") as HTMLSelectElement | null;
+  const viewportContainmentToggle = document.getElementById("viewport-containment-toggle") as HTMLInputElement | null;
   const assetPicker = document.getElementById("sphere-asset-picker") as HTMLSelectElement | null;
   const frontAssetsList = document.getElementById("front-assets-list");
   const backAssetsList = document.getElementById("back-assets-list");
@@ -428,6 +443,18 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
               )
             )
           )
+        },
+        viewport: {
+          enabled:
+            typeof station?.viewport?.enabled === "boolean"
+              ? station.viewport.enabled
+              : typeof config.arrangement?.viewport?.enabled === "boolean"
+                ? config.arrangement.viewport.enabled
+                : true,
+          paddingPx: Math.max(
+            0,
+            Number(station?.viewport?.paddingPx ?? config.arrangement?.viewport?.paddingPx ?? 18)
+          )
         }
       };
     }
@@ -446,6 +473,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           radius: Number(source.sphere.radius),
           circumference: Number(source.sphere.circumference),
           restitution: Number(source.sphere.restitution)
+        },
+        viewport: {
+          enabled: Boolean(source.viewport.enabled),
+          paddingPx: Number(source.viewport.paddingPx)
         }
       };
     }
@@ -486,6 +517,15 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           restitution: Number.isFinite(Number(raw?.sphere?.restitution))
             ? Math.max(0, Math.min(1, Number(raw.sphere.restitution)))
             : defaults.sphere.restitution
+        },
+        viewport: {
+          enabled:
+            typeof raw?.viewport?.enabled === "boolean"
+              ? raw.viewport.enabled
+              : defaults.viewport.enabled,
+          paddingPx: Number.isFinite(Number(raw?.viewport?.paddingPx))
+            ? Math.max(0, Number(raw.viewport.paddingPx))
+            : defaults.viewport.paddingPx
         }
       };
       normalizeCameraForSphere(loaded);
@@ -554,6 +594,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (key === "sphere.radius") return presentationSettings.sphere.radius;
         if (key === "sphere.circumference") return presentationSettings.sphere.circumference;
         if (key === "sphere.restitution") return presentationSettings.sphere.restitution;
+        if (key === "viewport.enabled") return presentationSettings.viewport.enabled;
+        if (key === "viewport.paddingPx") return presentationSettings.viewport.paddingPx;
         return cloneSettings(presentationSettings);
       },
       set(key: PresentationSettingKey, value: PresentationSettingValue) {
@@ -580,6 +622,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           applySphereGeometry(sphereFromCircumference(Number(value)));
         } else if (key === "sphere.restitution") {
           presentationSettings.sphere.restitution = Math.max(0, Math.min(1, Number(value) || 0));
+        } else if (key === "viewport.enabled") {
+          presentationSettings.viewport.enabled = Boolean(value);
+        } else if (key === "viewport.paddingPx") {
+          presentationSettings.viewport.paddingPx = Math.max(0, Number(value) || 0);
         }
         return publishSettings();
       },
@@ -604,6 +650,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           applySphereGeometry(sphereFromDiameter(defaults.sphere.diameter));
         }
         if (key === "sphere.restitution") presentationSettings.sphere.restitution = defaults.sphere.restitution;
+        if (key === "viewport.enabled") presentationSettings.viewport.enabled = defaults.viewport.enabled;
+        if (key === "viewport.paddingPx") presentationSettings.viewport.paddingPx = defaults.viewport.paddingPx;
         normalizeCameraForSphere(presentationSettings);
         return publishSettings();
       },
@@ -751,6 +799,9 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (cameraPlacementSelect) {
           cameraPlacementSelect.value = presentationSettings.camera.placement;
         }
+        if (viewportContainmentToggle) {
+          viewportContainmentToggle.checked = presentationSettings.viewport.enabled;
+        }
 
         frontAssetsList.replaceChildren();
         backAssetsList.replaceChildren();
@@ -849,6 +900,12 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         window.webrevPresentationSettings?.set(
           "camera.placement",
           cameraPlacementSelect.value === "inside" ? "inside" : "outside"
+        );
+      });
+      viewportContainmentToggle?.addEventListener("change", () => {
+        window.webrevPresentationSettings?.set(
+          "viewport.enabled",
+          viewportContainmentToggle.checked
         );
       });
       window.addEventListener("webrev:presentation-settings", () => {
@@ -1151,6 +1208,119 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         };
       }
 
+      function projectedObjectBounds(center: Vec3, obj: SceneObject) {
+        const worldCenter = {
+          x: center.x + obj.local.x,
+          y: center.y + obj.local.y,
+          z: center.z + obj.local.z
+        };
+        const centerProjection = project(worldCenter);
+        if (!centerProjection) return null;
+
+        if (obj.kind === "3d" && obj.modelBounds) {
+          const b = obj.modelBounds;
+          const corners = [
+            [b.min.x, b.min.y, b.min.z],
+            [b.min.x, b.min.y, b.max.z],
+            [b.min.x, b.max.y, b.min.z],
+            [b.min.x, b.max.y, b.max.z],
+            [b.max.x, b.min.y, b.min.z],
+            [b.max.x, b.min.y, b.max.z],
+            [b.max.x, b.max.y, b.min.z],
+            [b.max.x, b.max.y, b.max.z]
+          ];
+          const cos = Math.cos(obj.spin);
+          const sin = Math.sin(obj.spin);
+          let minX = Infinity, minY = Infinity;
+          let maxX = -Infinity, maxY = -Infinity;
+          let count = 0;
+
+          for (const [bx, by, bz] of corners) {
+            const sx = bx * obj.size;
+            const sy = by * obj.size;
+            const sz = bz * obj.size;
+            const rx = sx * cos + sz * sin;
+            const rz = -sx * sin + sz * cos;
+            const p = project({
+              x: worldCenter.x + rx,
+              y: worldCenter.y + sy,
+              z: worldCenter.z + rz
+            });
+            if (!p) continue;
+            count++;
+            minX = Math.min(minX, p.x);
+            minY = Math.min(minY, p.y);
+            maxX = Math.max(maxX, p.x);
+            maxY = Math.max(maxY, p.y);
+          }
+
+          if (count > 0) return { minX, minY, maxX, maxY, centerProjection };
+        }
+
+        const radius = Math.max(10, objectBodyRadius(obj) * centerProjection.scale);
+        return {
+          minX: centerProjection.x - radius,
+          minY: centerProjection.y - radius,
+          maxX: centerProjection.x + radius,
+          maxY: centerProjection.y + radius,
+          centerProjection
+        };
+      }
+
+      function pullIntoProjectableView(center: Vec3, obj: SceneObject) {
+        const world = {
+          x: center.x + obj.local.x,
+          y: center.y + obj.local.y,
+          z: center.z + obj.local.z
+        };
+        if (project(world)) return;
+
+        // Pull toward the image center without changing hemisphere sign.
+        for (let i = 0; i < 10; i++) {
+          obj.local.x *= 0.78;
+          obj.local.y *= 0.78;
+          obj.local.z *= 0.78;
+          enforceHemisphere(obj);
+          constrainToSphere(obj);
+          const candidate = {
+            x: center.x + obj.local.x,
+            y: center.y + obj.local.y,
+            z: center.z + obj.local.z
+          };
+          if (project(candidate)) return;
+        }
+      }
+
+      function constrainToViewport(center: Vec3, obj: SceneObject) {
+        if (!presentationSettings.viewport.enabled) return;
+
+        pullIntoProjectableView(center, obj);
+        const bounds = projectedObjectBounds(center, obj);
+        if (!bounds) return;
+
+        const pad = presentationSettings.viewport.paddingPx;
+        let dx = 0;
+        let dy = 0;
+
+        if (bounds.minX < pad) dx = pad - bounds.minX;
+        else if (bounds.maxX > width - pad) dx = (width - pad) - bounds.maxX;
+
+        if (bounds.minY < pad) dy = pad - bounds.minY;
+        else if (bounds.maxY > height - pad) dy = (height - pad) - bounds.maxY;
+
+        if (dx === 0 && dy === 0) return;
+
+        const worldPerPixel = 1 / Math.max(bounds.centerProjection.scale, 0.0001);
+
+        // Screen right/left maps to camera-local x. With locked/focus modes this is
+        // effectively world x/y; small iterative passes below handle look offsets.
+        obj.local.x += dx * worldPerPixel;
+        obj.local.y -= dy * worldPerPixel;
+
+        if (dx !== 0) obj.velocity.x *= -0.55;
+        if (dy !== 0) obj.velocity.y *= -0.55;
+      }
+
       function drawBackground() {
         const g = ctx.createRadialGradient(
           width * 0.5, height * 0.42, 10,
@@ -1222,9 +1392,25 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         obj.velocity = constrained.velocity;
       }
 
-      function solveObjectBounds(obj: SceneObject) {
+      function solveObjectBounds(stationIndex: number, obj: SceneObject) {
+        const center = stationCenter(stationIndex);
+
+        // Rule 1 is always authoritative.
         enforceHemisphere(obj);
         constrainToSphere(obj);
+
+        // Rule 2 is optional and only applies to the section currently being viewed.
+        if (presentationSettings.viewport.enabled && stationIndex === arrivingAt) {
+          for (let pass = 0; pass < 5; pass++) {
+            constrainToViewport(center, obj);
+            enforceHemisphere(obj);
+            constrainToSphere(obj);
+          }
+          // Final viewport correction followed by a final sphere guarantee.
+          constrainToViewport(center, obj);
+          enforceHemisphere(obj);
+          constrainToSphere(obj);
+        }
       }
 
       function updateObjects(now: number, dt: number) {
@@ -1251,7 +1437,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             obj.local.z += obj.velocity.z * dt;
 
             if (obj.kind === "3d") obj.spin += obj.spinVelocity * dt;
-            solveObjectBounds(obj);
+            solveObjectBounds(stationIndex, obj);
           }
         }
       }
@@ -1633,7 +1819,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           obj.velocity.x = Math.max(-maxToss, Math.min(maxToss, (dx / dt) * 0.0025));
           obj.velocity.y = Math.max(-maxToss, Math.min(maxToss, (-dy / dt) * 0.0025));
           draggedDistance += Math.hypot(dx, dy);
-          solveObjectBounds(obj);
+          solveObjectBounds(grabbed.stationIndex, obj);
 
           dragLastX = x;
           dragLastY = y;
@@ -1844,6 +2030,38 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   .sphere-diameter-note {
     color:rgba(255,255,255,.48);
     font-size:11px;
+  }
+
+  .sphere-viewport-toggle {
+    display:flex;
+    align-items:flex-start;
+    gap:10px;
+    margin:0 0 16px;
+    padding:10px 11px;
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:10px;
+    background:rgba(255,255,255,.035);
+    cursor:pointer;
+  }
+
+  .sphere-viewport-toggle input {
+    margin-top:2px;
+  }
+
+  .sphere-viewport-toggle span {
+    display:grid;
+    gap:2px;
+  }
+
+  .sphere-viewport-toggle strong {
+    font-size:12px;
+    font-weight:600;
+  }
+
+  .sphere-viewport-toggle small {
+    color:rgba(255,255,255,.5);
+    font-size:11px;
+    line-height:1.3;
   }
 
   .sphere-asset-add {
