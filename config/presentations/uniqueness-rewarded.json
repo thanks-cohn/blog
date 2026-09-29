@@ -78,6 +78,10 @@
       "sphereInside": {
         "enabled": false
       }
+    },
+    "assetHemisphere": {
+      "enabled": true,
+      "defaultSide": "front"
     }
   },
   "stations": [
