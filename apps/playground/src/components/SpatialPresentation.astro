@@ -1090,7 +1090,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         return { x: p.x, y: p.y + 0.35, z: cameraZ };
       }
 
-      function project(point: Vec3): Projected | null {
+      function cameraSpace(point: Vec3) {
         const camera = cameraPosition();
         const dx = point.x - camera.x;
         const dy = point.y - camera.y;
@@ -1106,7 +1106,51 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const y2 = dy * cp - z1 * sp;
         const z2 = dy * sp + z1 * cp;
 
-        const depth = -z2;
+        return { x: x1, y: y2, z: z2, depth: -z2 };
+      }
+
+      function moveAlongViewDepth(center: Vec3, obj: SceneObject, deltaDepth: number) {
+        if (deltaDepth <= 0) return;
+
+        // Convert a camera-space move straight away from the camera back into world space.
+        const cp = Math.cos(lookPitch);
+        const sp = Math.sin(lookPitch);
+        const cy = Math.cos(lookYaw);
+        const sy = Math.sin(lookYaw);
+
+        const cameraDx = 0;
+        const cameraDy = 0;
+        const cameraDz = -deltaDepth;
+
+        const pitchedY = cameraDy * cp + cameraDz * sp;
+        const pitchedZ = -cameraDy * sp + cameraDz * cp;
+
+        const worldX = cameraDx * cy + pitchedZ * sy;
+        const worldZ = -cameraDx * sy + pitchedZ * cy;
+
+        obj.local.x += worldX;
+        obj.local.y += pitchedY;
+        obj.local.z += worldZ;
+
+        // Kill only the velocity component that would immediately cross the near wall again.
+        const world = {
+          x: center.x + obj.local.x,
+          y: center.y + obj.local.y,
+          z: center.z + obj.local.z
+        };
+        const before = cameraSpace(world);
+        if (before.depth < 0.8) {
+          obj.velocity.x *= 0.5;
+          obj.velocity.y *= 0.5;
+          obj.velocity.z *= 0.5;
+        }
+      }
+
+      function project(point: Vec3): Projected | null {
+        const transformed = cameraSpace(point);
+        const x1 = transformed.x;
+        const y2 = transformed.y;
+        const depth = transformed.depth;
         if (depth < 0.35) return null;
 
         const focal = Math.min(width, height) * 0.92;
@@ -1190,11 +1234,27 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       function constrainToViewport(center: Vec3, obj: SceneObject) {
         if (!presentationSettings.collisions.viewport.enabled) return;
 
-        const projected = project({
+        let world = {
           x: center.x + obj.local.x,
           y: center.y + obj.local.y,
           z: center.z + obj.local.z
-        });
+        };
+
+        // The viewport includes a near wall. If an asset reaches the camera plane,
+        // screen projection ceases to exist, so repair depth before x/y clamping.
+        const space = cameraSpace(world);
+        const safeDepth = Math.max(0.9, obj.size * 1.35);
+        if (space.depth < safeDepth) {
+          moveAlongViewDepth(center, obj, safeDepth - space.depth);
+          enforceHemisphere(obj);
+          world = {
+            x: center.x + obj.local.x,
+            y: center.y + obj.local.y,
+            z: center.z + obj.local.z
+          };
+        }
+
+        const projected = project(world);
         if (!projected) return;
 
         const baseRadius = Math.max(8, obj.size * projected.scale);
@@ -1256,6 +1316,25 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (correctionY !== 0) obj.velocity.y *= -restitution;
       }
 
+      function solveObjectBounds(center: Vec3, obj: SceneObject) {
+        // Sphere and viewport constraints can push against one another. Resolve
+        // them together for a few bounded passes instead of letting the last one win.
+        for (let pass = 0; pass < 3; pass++) {
+          enforceHemisphere(obj);
+          if (presentationSettings.collisions.sphereInside.enabled) {
+            constrainToSphere(obj);
+          }
+          constrainToViewport(center, obj);
+        }
+
+        // Final sphere clamp guarantees a viewport correction cannot leave the
+        // object outside its assigned hemisphere's hard outer wall.
+        enforceHemisphere(obj);
+        if (presentationSettings.collisions.sphereInside.enabled) {
+          constrainToSphere(obj);
+        }
+      }
+
       function updateObjects(now: number, dt: number) {
         const damping = Math.pow(Number(motion.tossDamping) || 0.992, dt * 60);
         const floatStrength = Number(motion.floatStrength) || 0.08;
@@ -1278,13 +1357,9 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             obj.local.x += obj.velocity.x * dt;
             obj.local.y += obj.velocity.y * dt;
             obj.local.z += obj.velocity.z * dt;
-            enforceHemisphere(obj);
 
             if (obj.kind === "3d") obj.spin += obj.spinVelocity * dt;
-            if (presentationSettings.collisions.sphereInside.enabled) {
-              constrainToSphere(obj);
-            }
-            constrainToViewport(center, obj);
+            solveObjectBounds(center, obj);
           }
         }
       }
@@ -1661,10 +1736,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           obj.velocity.x = Math.max(-maxToss, Math.min(maxToss, (dx / dt) * 0.0025));
           obj.velocity.y = Math.max(-maxToss, Math.min(maxToss, (-dy / dt) * 0.0025));
           draggedDistance += Math.hypot(dx, dy);
-          if (presentationSettings.collisions.sphereInside.enabled) {
-            constrainToSphere(obj);
-          }
-          constrainToViewport(stationCenter(grabbed.stationIndex), obj);
+          solveObjectBounds(stationCenter(grabbed.stationIndex), obj);
 
           dragLastX = x;
           dragLastY = y;
