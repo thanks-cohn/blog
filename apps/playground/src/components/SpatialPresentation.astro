@@ -60,7 +60,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   <aside id="sphere-settings-panel" class="sphere-settings-panel" hidden>
     <div class="sphere-settings-header">
       <div>
-        <strong>Sphere assets</strong>
+        <strong id="station-settings-title">Sphere assets</strong>
         <div id="sphere-size-readout" class="sphere-size-readout"></div>
       </div>
       <button type="button" id="sphere-settings-close" class="sphere-settings-close" aria-label="Close settings">×</button>
@@ -203,6 +203,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   const settingsPanel = document.getElementById("sphere-settings-panel") as HTMLElement | null;
   const settingsClose = document.getElementById("sphere-settings-close") as HTMLButtonElement | null;
   const sphereSizeReadout = document.getElementById("sphere-size-readout");
+  const stationSettingsTitle = document.getElementById("station-settings-title");
   const sphereDiameterInput = document.getElementById("sphere-diameter-input") as HTMLInputElement | null;
   const sphereCircumferenceInput = document.getElementById("sphere-circumference-input") as HTMLInputElement | null;
   const cameraPlacementSelect = document.getElementById("camera-placement-select") as HTMLSelectElement | null;
@@ -326,16 +327,34 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   if (root && canvas instanceof HTMLCanvasElement) {
     const gameCanvas: HTMLCanvasElement = canvas;
     const config = JSON.parse(root.dataset.config ?? "{}");
-    const settingsStorageKey = "webrev:spatial-settings:v2";
-    const assetPlacementStorageKey = "webrev:asset-placement:v1";
+    const settingsStorageKey = "webrev:spatial-settings:v3";
+    const legacySettingsStorageKey = "webrev:spatial-settings:v2";
+    const assetPlacementStorageKey = "webrev:asset-placement:v2";
+    const stationDefinitions = Array.isArray(config.stations) ? config.stations : [];
 
-    function allDiscoveredAssets() {
+    function allSceneAssetNames() {
       const result: Array<{ name: string; stationId: string }> = [];
-      for (const station of Array.isArray(config.stations) ? config.stations : []) {
+      for (const station of stationDefinitions) {
         const assets = Array.isArray(config.assetsByArtwork?.[station.artworkName])
           ? config.assetsByArtwork[station.artworkName]
           : [];
         for (const asset of assets) result.push({ name: asset.name, stationId: station.id });
+
+        const requestedDisplayMode = station.assetDisplayMode ?? config.arrangement?.assetDisplayMode;
+        const displayMode = requestedDisplayMode === "assets-and-proxies"
+          ? "assets-and-proxies"
+          : "assets-only";
+        const proxyCount = Math.max(
+          0,
+          Math.floor(Number(config.arrangement?.proxyCount ?? config.arrangement?.sphere?.defaultObjectCount ?? 10))
+        );
+        const fallbackProxyCount = assets.length === 0
+          ? (proxyCount || Number(config.arrangement?.sphere?.defaultObjectCount) || 10)
+          : 0;
+        const extraProxyCount = displayMode === "assets-and-proxies" ? proxyCount : fallbackProxyCount;
+        for (let i = 0; i < extraProxyCount; i++) {
+          result.push({ name: `${station.artworkName}-proxy-${i + 1}`, stationId: station.id });
+        }
       }
       return result;
     }
@@ -346,7 +365,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         stored = JSON.parse(window.localStorage.getItem(assetPlacementStorageKey) ?? "{}");
       } catch {}
       const state: AssetPlacementState = {};
-      for (const asset of allDiscoveredAssets()) {
+      for (const asset of allSceneAssetNames()) {
         const saved = stored?.[asset.name];
         state[asset.name] = {
           hemisphere: saved?.hemisphere === "back" ? "back" : "front",
@@ -365,47 +384,54 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       window.dispatchEvent(new CustomEvent("webrev:asset-placement", { detail: assetPlacement }));
     }
 
-    const configuredDiameter = Number(
-      config.arrangement?.sphere?.diameter ??
-      config.arrangement?.assetRange?.sphereDiameter ??
-      ((config.arrangement?.influenceSphere?.radius ?? 6.4) * 2)
-    );
-    const configuredSphere = sphereFromDiameter(configuredDiameter);
-    const configuredPlacement: CameraPlacement =
-      config.arrangement?.camera?.placement === "inside" ? "inside" : "outside";
-    const configuredCameraDistance = cameraDistanceForPlacement(
-      configuredPlacement,
-      configuredSphere.radius,
-      Number(config.arrangement?.camera?.distanceFromCenter)
-    );
-
-    const settingDefaults: PresentationSettingsSnapshot = {
-      camera: {
-        mode:
-          config.arrangement?.camera?.mode === "focus" || config.arrangement?.camera?.mode === "free"
-            ? config.arrangement.camera.mode
-            : config.arrangement?.controls?.cameraMode === "focus" || config.arrangement?.controls?.cameraMode === "free"
-              ? config.arrangement.controls.cameraMode
-              : "locked",
-        placement: configuredPlacement,
-        distanceFromCenter: configuredCameraDistance
-      },
-      sphere: {
-        ...configuredSphere,
-        restitution: Math.max(
-          0,
-          Math.min(
-            1,
-            Number(
-              config.arrangement?.sphere?.collision?.restitution ??
-              config.arrangement?.collisions?.sphereInside?.restitution ??
-              config.arrangement?.motion?.boundaryRestitution ??
-              0.5
+    function defaultsForStation(station: any): PresentationSettingsSnapshot {
+      const configuredDiameter = Number(
+        station?.sphere?.diameter ??
+        config.arrangement?.sphere?.diameter ??
+        12.8
+      );
+      const configuredSphere = sphereFromDiameter(configuredDiameter);
+      const placement: CameraPlacement =
+        (station?.camera?.placement ?? config.arrangement?.camera?.placement) === "inside"
+          ? "inside"
+          : "outside";
+      const requestedCameraDistance = Number(
+        station?.camera?.distanceFromCenter ??
+        config.arrangement?.camera?.distanceFromCenter
+      );
+      return {
+        camera: {
+          mode:
+            station?.camera?.mode === "focus" || station?.camera?.mode === "free"
+              ? station.camera.mode
+              : config.arrangement?.camera?.mode === "focus" || config.arrangement?.camera?.mode === "free"
+                ? config.arrangement.camera.mode
+                : "locked",
+          placement,
+          distanceFromCenter: cameraDistanceForPlacement(
+            placement,
+            configuredSphere.radius,
+            requestedCameraDistance
+          )
+        },
+        sphere: {
+          ...configuredSphere,
+          restitution: Math.max(
+            0,
+            Math.min(
+              1,
+              Number(
+                station?.sphere?.collision?.restitution ??
+                config.arrangement?.sphere?.collision?.restitution ??
+                config.arrangement?.motion?.boundaryRestitution ??
+                0.5
+              )
             )
           )
-        )
-      }
-    };
+        }
+      };
+    }
+
     const settingsListeners = new Set<SettingsListener>();
 
     function cloneSettings(source: PresentationSettingsSnapshot): PresentationSettingsSnapshot {
@@ -432,49 +458,83 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       );
     }
 
-    function loadSettings(): PresentationSettingsSnapshot {
-      try {
-        const parsed = JSON.parse(window.localStorage.getItem(settingsStorageKey) ?? "{}");
-        const sphere = Number.isFinite(Number(parsed?.sphere?.diameter))
-          ? sphereFromDiameter(Number(parsed.sphere.diameter))
-          : configuredSphere;
-        const placement: CameraPlacement = parsed?.camera?.placement === "inside" ? "inside" : configuredPlacement;
-        const loaded: PresentationSettingsSnapshot = {
-          camera: {
-            mode:
-              parsed?.camera?.mode === "focus" || parsed?.camera?.mode === "free"
-                ? parsed.camera.mode
-                : settingDefaults.camera.mode,
+    function parseStoredSettings(raw: any, station: any): PresentationSettingsSnapshot {
+      const defaults = defaultsForStation(station);
+      const sphere = Number.isFinite(Number(raw?.sphere?.diameter))
+        ? sphereFromDiameter(Number(raw.sphere.diameter))
+        : defaults.sphere;
+      const placement: CameraPlacement = raw?.camera?.placement === "inside"
+        ? "inside"
+        : raw?.camera?.placement === "outside"
+          ? "outside"
+          : defaults.camera.placement;
+      const loaded: PresentationSettingsSnapshot = {
+        camera: {
+          mode:
+            raw?.camera?.mode === "focus" || raw?.camera?.mode === "free"
+              ? raw.camera.mode
+              : defaults.camera.mode,
+          placement,
+          distanceFromCenter: cameraDistanceForPlacement(
             placement,
-            distanceFromCenter: cameraDistanceForPlacement(
-              placement,
-              sphere.radius,
-              Number(parsed?.camera?.distanceFromCenter)
-            )
-          },
-          sphere: {
-            ...sphere,
-            restitution: Number.isFinite(Number(parsed?.sphere?.restitution))
-              ? Math.max(0, Math.min(1, Number(parsed.sphere.restitution)))
-              : settingDefaults.sphere.restitution
-          }
-        };
-        normalizeCameraForSphere(loaded);
-        return loaded;
-      } catch {
-        return cloneSettings(settingDefaults);
-      }
+            sphere.radius,
+            Number(raw?.camera?.distanceFromCenter)
+          )
+        },
+        sphere: {
+          ...sphere,
+          restitution: Number.isFinite(Number(raw?.sphere?.restitution))
+            ? Math.max(0, Math.min(1, Number(raw.sphere.restitution)))
+            : defaults.sphere.restitution
+        }
+      };
+      normalizeCameraForSphere(loaded);
+      return loaded;
     }
 
-    let presentationSettings = loadSettings();
+    function loadStationSettings() {
+      let stored: any = {};
+      let legacy: any = {};
+      try {
+        stored = JSON.parse(window.localStorage.getItem(settingsStorageKey) ?? "{}");
+      } catch {}
+      try {
+        legacy = JSON.parse(window.localStorage.getItem(legacySettingsStorageKey) ?? "{}");
+      } catch {}
+
+      const byStation: Record<string, PresentationSettingsSnapshot> = {};
+      for (const station of stationDefinitions) {
+        byStation[station.id] = parseStoredSettings(
+          stored?.stations?.[station.id] ?? legacy,
+          station
+        );
+      }
+      return byStation;
+    }
+
+    let stationSettings = loadStationSettings();
+    let activeStationId = stationDefinitions[0]?.id ?? "default";
+    let presentationSettings =
+      stationSettings[activeStationId] ??
+      defaultsForStation(stationDefinitions[0] ?? { id: activeStationId });
+
+    function saveStationSettings() {
+      try {
+        window.localStorage.setItem(
+          settingsStorageKey,
+          JSON.stringify({ stations: stationSettings })
+        );
+      } catch {}
+    }
 
     function publishSettings() {
-      try {
-        window.localStorage.setItem(settingsStorageKey, JSON.stringify(presentationSettings));
-      } catch {}
+      stationSettings[activeStationId] = presentationSettings;
+      saveStationSettings();
       const snapshot = cloneSettings(presentationSettings);
       for (const listener of settingsListeners) listener(snapshot);
-      window.dispatchEvent(new CustomEvent("webrev:presentation-settings", { detail: snapshot }));
+      window.dispatchEvent(new CustomEvent("webrev:presentation-settings", {
+        detail: { stationId: activeStationId, settings: snapshot }
+      }));
       return snapshot;
     }
 
@@ -524,22 +584,26 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         return publishSettings();
       },
       reset(key?: PresentationSettingKey) {
+        const defaults = defaultsForStation(
+          stationDefinitions.find((station: any) => station.id === activeStationId)
+        );
         if (!key) {
-          presentationSettings = cloneSettings(settingDefaults);
+          presentationSettings = cloneSettings(defaults);
+          stationSettings[activeStationId] = presentationSettings;
           return publishSettings();
         }
-        if (key === "camera.mode") presentationSettings.camera.mode = settingDefaults.camera.mode;
+        if (key === "camera.mode") presentationSettings.camera.mode = defaults.camera.mode;
         if (key === "camera.placement") {
-          presentationSettings.camera.placement = settingDefaults.camera.placement;
-          presentationSettings.camera.distanceFromCenter = settingDefaults.camera.distanceFromCenter;
+          presentationSettings.camera.placement = defaults.camera.placement;
+          presentationSettings.camera.distanceFromCenter = defaults.camera.distanceFromCenter;
         }
         if (key === "camera.distanceFromCenter") {
-          presentationSettings.camera.distanceFromCenter = settingDefaults.camera.distanceFromCenter;
+          presentationSettings.camera.distanceFromCenter = defaults.camera.distanceFromCenter;
         }
         if (key === "sphere.diameter" || key === "sphere.radius" || key === "sphere.circumference") {
-          applySphereGeometry(sphereFromDiameter(settingDefaults.sphere.diameter));
+          applySphereGeometry(sphereFromDiameter(defaults.sphere.diameter));
         }
-        if (key === "sphere.restitution") presentationSettings.sphere.restitution = settingDefaults.sphere.restitution;
+        if (key === "sphere.restitution") presentationSettings.sphere.restitution = defaults.sphere.restitution;
         normalizeCameraForSphere(presentationSettings);
         return publishSettings();
       },
@@ -549,29 +613,30 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         return () => settingsListeners.delete(listener);
       },
       listAssets(stationId?: string) {
-        const allowed = new Set(
-          allDiscoveredAssets()
-            .filter((asset) => !stationId || asset.stationId === stationId)
+        const targetStationId = stationId ?? activeStationId;
+        const names = new Set(
+          allSceneAssetNames()
+            .filter((asset) => asset.stationId === targetStationId)
             .map((asset) => asset.name)
         );
         return Object.entries(assetPlacement)
-          .filter(([name]) => allowed.has(name))
+          .filter(([name]) => names.has(name))
           .map(([name, state]) => ({ name, ...state }));
       },
       setAssetHemisphere(name: string, hemisphere: AssetHemisphere) {
-        if (!assetPlacement[name]) return;
+        assetPlacement[name] ??= { hemisphere: "front", visible: true };
         assetPlacement[name].hemisphere = hemisphere === "back" ? "back" : "front";
         assetPlacement[name].visible = true;
         saveAssetPlacement();
       },
       setAssetVisible(name: string, visible: boolean) {
-        if (!assetPlacement[name]) return;
+        assetPlacement[name] ??= { hemisphere: "front", visible: true };
         assetPlacement[name].visible = Boolean(visible);
         saveAssetPlacement();
       }
     };
 
-    const stations = Array.isArray(config.stations) ? config.stations : [];
+    const stations = stationDefinitions;
     const assetsByArtwork = config.assetsByArtwork ?? {};
     const assetActions = config.assetActions ?? {};
     const resolvedLinks = config.resolvedLinks ?? {};
@@ -671,6 +736,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
       function renderSphereSettings() {
         if (!frontAssetsList || !backAssetsList || !assetPicker || !sphereSizeReadout) return;
+        const currentStation = stations[arrivingAt];
+        if (stationSettingsTitle) {
+          stationSettingsTitle.textContent = `${currentStation?.label ?? "Section"} settings`;
+        }
         sphereSizeReadout.textContent =
           `Radius ${presentationSettings.sphere.radius.toFixed(2)} · collision boundary = sphere surface`;
         if (sphereDiameterInput && document.activeElement !== sphereDiameterInput) {
@@ -687,13 +756,12 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         backAssetsList.replaceChildren();
 
         const currentLayout = layouts[arrivingAt] ?? [];
-        const uploaded = currentLayout.filter((obj: SceneObject) => Boolean(obj.url));
-        const hidden = uploaded.filter((obj: SceneObject) => obj.visible === false);
+        const hidden = currentLayout.filter((obj: SceneObject) => obj.visible === false);
 
-        for (const obj of uploaded.filter((obj: SceneObject) => obj.visible !== false && obj.hemisphere !== "back")) {
+        for (const obj of currentLayout.filter((obj: SceneObject) => obj.visible !== false && obj.hemisphere !== "back")) {
           frontAssetsList.appendChild(makeAssetRow(obj));
         }
-        for (const obj of uploaded.filter((obj: SceneObject) => obj.visible !== false && obj.hemisphere === "back")) {
+        for (const obj of currentLayout.filter((obj: SceneObject) => obj.visible !== false && obj.hemisphere === "back")) {
           backAssetsList.appendChild(makeAssetRow(obj));
         }
 
@@ -784,6 +852,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         );
       });
       window.addEventListener("webrev:presentation-settings", () => {
+        stationSettings[activeStationId] = presentationSettings;
         targetZ = stationZ(arrivingAt) + presentationSettings.camera.distanceFromCenter;
         renderSphereSettings();
       });
@@ -886,7 +955,6 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       }
 
       function enforceHemisphere(obj: SceneObject) {
-        if (!obj.url) return;
         const minimum = Math.max(0.02, objectBodyRadius(obj));
         const magnitude = Math.max(Math.abs(obj.local.z), minimum);
         obj.local.z = obj.hemisphere === "back" ? -magnitude : magnitude;
@@ -896,7 +964,6 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (typeof layouts === "undefined") return;
         for (const layout of layouts) {
           for (const obj of layout) {
-            if (!obj.url) continue;
             const state = assetPlacement[obj.name] ?? { hemisphere: "front" as AssetHemisphere, visible: true };
             obj.hemisphere = state.hemisphere;
             obj.visible = state.visible;
@@ -955,8 +1022,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             action: asset ? assetActions[asset.name] : undefined,
             depthLayer: kind === "3d" ? threeSettings.layer : undefined,
             hideBehindImage: kind === "3d" ? threeSettings.hideBehindImage : undefined,
-            hemisphere: asset ? (assetPlacement[asset.name]?.hemisphere ?? "front") : "front",
-            visible: asset ? (assetPlacement[asset.name]?.visible ?? true) : true
+            hemisphere: assetPlacement[asset?.name ?? `${station.artworkName}-proxy-${i + 1}`]?.hemisphere ?? "front",
+            visible: assetPlacement[asset?.name ?? `${station.artworkName}-proxy-${i + 1}`]?.visible ?? true
           };
           enforceHemisphere(obj);
 
@@ -1016,12 +1083,35 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         }
       }
 
+      function outsideDistanceToFitSphere() {
+        if (presentationSettings.camera.placement !== "outside") {
+          return presentationSettings.camera.distanceFromCenter;
+        }
+
+        const radius = presentationSettings.sphere.radius;
+        const minViewport = Math.max(1, Math.min(width, height));
+        const focal = minViewport * 0.92;
+        const padding = Math.max(28, minViewport * 0.045);
+        const allowedRadiusPx = Math.max(1, minViewport * 0.5 - padding);
+        const required = radius * Math.sqrt(
+          1 + Math.pow(focal / allowedRadiusPx, 2)
+        );
+        return Math.max(
+          presentationSettings.camera.distanceFromCenter,
+          required + Math.max(0.15, radius * 0.04)
+        );
+      }
+
       function cameraPosition(): Vec3 {
         const center = stationCenter(arrivingAt);
+        const animatedDistance = cameraZ - stationZ(arrivingAt);
+        const distance = presentationSettings.camera.placement === "outside"
+          ? Math.max(animatedDistance, outsideDistanceToFitSphere())
+          : animatedDistance;
         return {
           x: center.x,
           y: center.y,
-          z: center.z + (cameraZ - stationZ(arrivingAt))
+          z: center.z + distance
         };
       }
 
@@ -1289,7 +1379,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const alpha = Math.max(.12, Math.min(1, 1 - cp.depth / 60));
         const station3dSettings = resolve3dSettings(station);
         const hasVisibleBackAsset = layouts[index].some(
-          (obj: SceneObject) => obj.url && obj.visible !== false && obj.hemisphere === "back"
+          (obj: SceneObject) => obj.visible !== false && obj.hemisphere === "back"
         );
         if (station3dSettings.hideBehindImage || hasVisibleBackAsset) ensureImageOccluder(index, center);
         for (const obj of layouts[index]) drawSceneObject(center, obj, alpha * .84, now);
@@ -1364,6 +1454,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
       function requestStation(index: number) {
         arrivingAt = Math.max(0, Math.min(stations.length - 1, index));
+        activeStationId = stations[arrivingAt]?.id ?? activeStationId;
+        presentationSettings =
+          stationSettings[activeStationId] ??
+          defaultsForStation(stations[arrivingAt]);
+        stationSettings[activeStationId] = presentationSettings;
         targetZ = stationZ(arrivingAt) + presentationSettings.camera.distanceFromCenter;
         paperOpen = 0;
         paperTarget = 0;
