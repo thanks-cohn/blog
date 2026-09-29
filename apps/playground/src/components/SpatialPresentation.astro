@@ -318,7 +318,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           ? configuredProxyCount
           : fallbackProxyCount;
         const sceneItems = [
-          ...discovered.map((asset: DiscoveredAsset) => ({ asset })),
+          ...discovered.map((asset: any) => ({ asset })),
           ...Array.from({ length: extraProxyCount }, () => ({ asset: undefined }))
         ];
         const result: SceneObject[] = [];
