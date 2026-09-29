@@ -220,6 +220,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
     | "focusAudio.track"
     | "focusAudio.volume"
     | "focusAudio.fadeInMs"
+    | "focusAudio.fadeOutMs"
     | "debug.glbGlobe.enabled"
     | "debug.glbGlobe.objectName"
     | "editor.mode"
@@ -267,6 +268,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       track: string;
       volume: number;
       fadeInMs: number;
+      fadeOutMs: number;
     };
     debug: {
       glbGlobe: {
@@ -850,6 +852,10 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           fadeInMs: Math.max(
             0,
             Number(station?.focusAudio?.fadeInMs ?? config.arrangement?.focusAudio?.fadeInMs ?? 1100)
+          ),
+          fadeOutMs: Math.max(
+            0,
+            Number(station?.focusAudio?.fadeOutMs ?? config.arrangement?.focusAudio?.fadeOutMs ?? 1800)
           )
         },
         debug: {
@@ -906,7 +912,8 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           enabled: Boolean(source.focusAudio.enabled),
           track: String(source.focusAudio.track ?? ""),
           volume: Math.max(0, Math.min(1, Number(source.focusAudio.volume))),
-          fadeInMs: Math.max(0, Number(source.focusAudio.fadeInMs))
+          fadeInMs: Math.max(0, Number(source.focusAudio.fadeInMs)),
+          fadeOutMs: Math.max(0, Number(source.focusAudio.fadeOutMs))
         },
         debug: {
           glbGlobe: {
@@ -1012,7 +1019,10 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
             : defaults.focusAudio.volume,
           fadeInMs: Number.isFinite(Number(raw?.focusAudio?.fadeInMs))
             ? Math.max(0, Number(raw.focusAudio.fadeInMs))
-            : defaults.focusAudio.fadeInMs
+            : defaults.focusAudio.fadeInMs,
+          fadeOutMs: Number.isFinite(Number(raw?.focusAudio?.fadeOutMs))
+            ? Math.max(0, Number(raw.focusAudio.fadeOutMs))
+            : defaults.focusAudio.fadeOutMs
         },
         debug: {
           glbGlobe: {
@@ -1245,6 +1255,16 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           description: "Milliseconds from silence to the selected volume after the camera settles."
         },
         {
+          key: "focusAudio.fadeOutMs",
+          label: "Fade-out",
+          group: "focusAudio",
+          control: "number",
+          min: 0,
+          max: 10000,
+          step: 100,
+          description: "Milliseconds for the song to gently disappear after Leave for now <3."
+        },
+        {
           key: "debug.glbGlobe.enabled",
           label: "Debug globe",
           group: "debug",
@@ -1363,6 +1383,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         if (key === "focusAudio.track") return presentationSettings.focusAudio.track;
         if (key === "focusAudio.volume") return presentationSettings.focusAudio.volume;
         if (key === "focusAudio.fadeInMs") return presentationSettings.focusAudio.fadeInMs;
+        if (key === "focusAudio.fadeOutMs") return presentationSettings.focusAudio.fadeOutMs;
         if (key === "debug.glbGlobe.enabled") return presentationSettings.debug.glbGlobe.enabled;
         if (key === "debug.glbGlobe.objectName") return presentationSettings.debug.glbGlobe.objectName;
         if (key === "editor.mode") return presentationSettings.editor.mode;
@@ -1422,6 +1443,8 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           presentationSettings.focusAudio.volume = Math.max(0, Math.min(1, Number(value) || 0));
         } else if (key === "focusAudio.fadeInMs") {
           presentationSettings.focusAudio.fadeInMs = Math.max(0, Number(value) || 0);
+        } else if (key === "focusAudio.fadeOutMs") {
+          presentationSettings.focusAudio.fadeOutMs = Math.max(0, Number(value) || 0);
         } else if (key === "debug.glbGlobe.enabled") {
           presentationSettings.debug.glbGlobe.enabled = Boolean(value);
         } else if (key === "debug.glbGlobe.objectName") {
@@ -1487,6 +1510,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         if (key === "focusAudio.track") presentationSettings.focusAudio.track = defaults.focusAudio.track;
         if (key === "focusAudio.volume") presentationSettings.focusAudio.volume = defaults.focusAudio.volume;
         if (key === "focusAudio.fadeInMs") presentationSettings.focusAudio.fadeInMs = defaults.focusAudio.fadeInMs;
+        if (key === "focusAudio.fadeOutMs") presentationSettings.focusAudio.fadeOutMs = defaults.focusAudio.fadeOutMs;
         if (key === "debug.glbGlobe.enabled") presentationSettings.debug.glbGlobe.enabled = defaults.debug.glbGlobe.enabled;
         if (key === "debug.glbGlobe.objectName") presentationSettings.debug.glbGlobe.objectName = defaults.debug.glbGlobe.objectName;
         if (key === "editor.mode" || key === "editor.hemisphere" || key === "editor.cameraPreset" || key === "editor.repositionObjectName") presentationSettings.editor = { mode: "none" };
@@ -3539,6 +3563,41 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         focusAudioFadeFrame = requestAnimationFrame(step);
       }
 
+      function fadeOutFocusAudio() {
+        if (focusAudioFadeFrame) cancelAnimationFrame(focusAudioFadeFrame);
+        focusAudioFadeFrame = 0;
+
+        const audio = focusAudioElement;
+        if (!audio) return;
+
+        const startVolume = Math.max(0, Math.min(1, audio.volume));
+        const duration = Math.max(0, presentationSettings.focusAudio.fadeOutMs);
+        const startedAt = performance.now();
+
+        const finish = () => {
+          if (focusAudioElement !== audio) return;
+          audio.volume = 0;
+          audio.pause();
+          audio.currentTime = 0;
+          focusAudioElement = null;
+          focusAudioFadeFrame = 0;
+        };
+
+        if (duration === 0 || startVolume === 0) {
+          finish();
+          return;
+        }
+
+        const step = (now: number) => {
+          if (focusAudioElement !== audio) return;
+          const t = Math.min(1, (now - startedAt) / duration);
+          audio.volume = startVolume * (1 - t);
+          if (t < 1) focusAudioFadeFrame = requestAnimationFrame(step);
+          else finish();
+        };
+        focusAudioFadeFrame = requestAnimationFrame(step);
+      }
+
       function beginFocusExperience(obj: SceneObject) {
         const stationIndex = arrivingAt;
         const radius = objectBodyRadius(obj);
@@ -3573,7 +3632,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       }
 
       function endFocusExperience() {
-        stopFocusAudio();
+        fadeOutFocusAudio();
         if (!focusExperience) return;
         const obj = focusExperience.object;
         obj.local = { ...focusExperience.baseLocal };
