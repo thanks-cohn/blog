@@ -15,6 +15,20 @@ const discovered2d = import.meta.glob("../assets/2d-assets/*.{png,jpg,jpeg,webp,
   import: "default"
 }) as Record<string, string>;
 
+const discoveredCenterImages = import.meta.glob("../assets/2d-assets/*-center.{png,jpg,jpeg,webp,avif}", {
+  eager: true,
+  query: "?url",
+  import: "default"
+}) as Record<string, string>;
+
+const centerImagesByArtwork: Record<string, string> = {};
+for (const [path, url] of Object.entries(discoveredCenterImages)) {
+  const file = path.split("/").pop() ?? "";
+  const base = file.replace(/\.[^.]+$/, "");
+  const artworkName = base.replace(/-center$/, "");
+  if (artworkName && artworkName !== base) centerImagesByArtwork[artworkName] = url;
+}
+
 const discovered3d = import.meta.glob("../assets/3d-assets/*.{glb,gltf}", {
   eager: true,
   query: "?url",
@@ -35,7 +49,7 @@ function registerAsset(path: string, url: string, kind: "2d" | "3d") {
 for (const [path, url] of Object.entries(discovered2d)) registerAsset(path, url, "2d");
 for (const [path, url] of Object.entries(discovered3d)) registerAsset(path, url, "3d");
 
-const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
+const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, resolvedLinks: links };
 ---
 
 <div
@@ -2337,7 +2351,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         return ["#5a3a22", "#d5a268", "#1b120c"];
       }
 
-      function createMainImageTexture(station: any) {
+      function createFallbackMainImageTexture(station: any) {
         const textureCanvas = document.createElement("canvas");
         textureCanvas.width = 1024;
         textureCanvas.height = 1120;
@@ -2387,9 +2401,18 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         return texture;
       }
 
+      function mainImageUrlFor(station: any) {
+        return String(
+          station?.centerImage ??
+          config.centerImagesByArtwork?.[station.artworkName] ??
+          ""
+        );
+      }
+
       function ensureMainImagePlane(station: any, center: Vec3) {
         if (!threeScene) return null;
-        const signature = [station.id, station.label, station.theme].join("|");
+        const imageUrl = mainImageUrlFor(station);
+        const signature = [station.id, station.label, station.theme, imageUrl].join("|");
         let entry = imagePlanes.get(station.id);
 
         if (!entry || entry.signature !== signature) {
@@ -2400,18 +2423,42 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             entry.texture?.dispose?.();
           }
 
-          const texture = createMainImageTexture(station);
-          if (!texture) return null;
+          const fallbackTexture = createFallbackMainImageTexture(station);
+          if (!fallbackTexture) return null;
 
           const T3: any = THREE;
           const group = new T3.Group();
           const geometry = new T3.PlaneGeometry(5.4, 5.9);
           const material = new T3.MeshBasicMaterial({
-            map: texture,
+            map: fallbackTexture,
             side: T3.DoubleSide,
             depthTest: true,
             depthWrite: true
           });
+
+          let texture = fallbackTexture;
+          if (imageUrl) {
+            const loader = new T3.TextureLoader();
+            loader.load(
+              imageUrl,
+              (loaded: any) => {
+                loaded.needsUpdate = true;
+                material.map = loaded;
+                material.needsUpdate = true;
+                const live = imagePlanes.get(station.id);
+                if (live && live.signature === signature) {
+                  live.texture?.dispose?.();
+                  live.texture = loaded;
+                } else {
+                  loaded.dispose?.();
+                }
+              },
+              undefined,
+              (error: any) => {
+                console.warn(`Center image failed to load for ${station.id}: ${imageUrl}`, error);
+              }
+            );
+          }
           const mesh = new T3.Mesh(geometry, material);
           mesh.renderOrder = 10;
           group.add(mesh);
