@@ -529,15 +529,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         assetPlacement[name].hemisphere = hemisphere === "back" ? "back" : "front";
         assetPlacement[name].visible = true;
         saveAssetPlacement();
-        syncAssetPlacementToLayouts();
-        renderSphereSettings();
       },
       setAssetVisible(name: string, visible: boolean) {
         if (!assetPlacement[name]) return;
         assetPlacement[name].visible = Boolean(visible);
         saveAssetPlacement();
-        syncAssetPlacementToLayouts();
-        renderSphereSettings();
       }
     };
 
@@ -688,6 +684,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         assetPicker.value = "";
       });
       window.addEventListener("webrev:presentation-settings", renderSphereSettings);
+      window.addEventListener("webrev:asset-placement", () => {
+        syncAssetPlacementToLayouts();
+        renderSphereSettings();
+      });
       renderSphereSettings();
 
       function stationZ(index: number) {
