@@ -68,6 +68,16 @@
     "assetRange": {
       "minDistanceFromCenter": 4.2,
       "maxDistanceFromCenter": 6.4
+    },
+    "collisions": {
+      "viewport": {
+        "enabled": true,
+        "restitution": 0.72,
+        "paddingPx": 18
+      },
+      "sphereInside": {
+        "enabled": false
+      }
     }
   },
   "stations": [
