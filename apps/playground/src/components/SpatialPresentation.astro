@@ -130,6 +130,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     hideBehindImage?: boolean;
     hemisphere?: "front" | "back";
     visible?: boolean;
+    modelBounds?: {
+      min: Vec3;
+      max: Vec3;
+    };
     lastScreen?: { x: number; y: number; radius: number; depth: number };
   };
 
@@ -251,6 +255,23 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const maxDimension = Math.max(size.x, size.y, size.z) || 1;
         root.position.sub(center);
         root.scale.setScalar(2 / maxDimension);
+
+        // Recompute bounds after normalization. Viewport collision must use the
+        // actual visible model extents rather than an estimated radius.
+        root.updateMatrixWorld(true);
+        const normalizedBox: any = new T3.Box3().setFromObject(root);
+        obj.modelBounds = {
+          min: {
+            x: normalizedBox.min.x,
+            y: normalizedBox.min.y,
+            z: normalizedBox.min.z
+          },
+          max: {
+            x: normalizedBox.max.x,
+            y: normalizedBox.max.y,
+            z: normalizedBox.max.z
+          }
+        };
 
         const group: any = new T3.Group();
         group.add(root);
@@ -1231,6 +1252,51 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         }
       }
 
+      function projectedObjectBounds(center: Vec3, obj: SceneObject) {
+        if (obj.kind !== "3d" || !obj.modelBounds) return null;
+
+        const b = obj.modelBounds;
+        const corners = [
+          [b.min.x, b.min.y, b.min.z],
+          [b.min.x, b.min.y, b.max.z],
+          [b.min.x, b.max.y, b.min.z],
+          [b.min.x, b.max.y, b.max.z],
+          [b.max.x, b.min.y, b.min.z],
+          [b.max.x, b.min.y, b.max.z],
+          [b.max.x, b.max.y, b.min.z],
+          [b.max.x, b.max.y, b.max.z]
+        ];
+
+        const cos = Math.cos(obj.spin);
+        const sin = Math.sin(obj.spin);
+        let minX = Infinity, minY = Infinity;
+        let maxX = -Infinity, maxY = -Infinity;
+        let visibleCorners = 0;
+
+        for (const [bx, by, bz] of corners) {
+          // Match the Three.js group transform: scale, then Y rotation, then translation.
+          const sx = bx * obj.size;
+          const sy = by * obj.size;
+          const sz = bz * obj.size;
+          const rx = sx * cos + sz * sin;
+          const rz = -sx * sin + sz * cos;
+          const p = project({
+            x: center.x + obj.local.x + rx,
+            y: center.y + obj.local.y + sy,
+            z: center.z + obj.local.z + rz
+          });
+          if (!p) continue;
+          visibleCorners++;
+          minX = Math.min(minX, p.x);
+          minY = Math.min(minY, p.y);
+          maxX = Math.max(maxX, p.x);
+          maxY = Math.max(maxY, p.y);
+        }
+
+        if (!visibleCorners || !Number.isFinite(minX) || !Number.isFinite(minY)) return null;
+        return { minX, minY, maxX, maxY };
+      }
+
       function constrainToViewport(center: Vec3, obj: SceneObject) {
         if (!presentationSettings.collisions.viewport.enabled) return;
 
@@ -1257,28 +1323,35 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         const projected = project(world);
         if (!projected) return;
 
-        const baseRadius = Math.max(8, obj.size * projected.scale);
-        // 3D meshes can extend well beyond the nominal object center because their
-        // normalized bounds are later scaled in WebGL. Use a conservative screen
-        // radius so the complete model, not just its anchor point, stays visible.
-        const radius = obj.kind === "3d"
-          ? Math.max(baseRadius * 2.15, 28)
-          : baseRadius;
         const pad = presentationSettings.collisions.viewport.paddingPx;
-        const minX = pad + radius;
-        const maxX = width - pad - radius;
-        const minY = pad + radius;
-        const maxY = height - pad - radius;
+        const actualBounds = projectedObjectBounds(center, obj);
+        const baseRadius = Math.max(8, obj.size * projected.scale);
+        const fallbackRadius = obj.kind === "3d"
+          ? Math.max(baseRadius * 2.5, 32)
+          : baseRadius;
         const restitution = presentationSettings.collisions.viewport.restitution;
 
         let correctionX = 0;
         let correctionY = 0;
 
-        if (projected.x < minX) correctionX = minX - projected.x;
-        else if (projected.x > maxX) correctionX = maxX - projected.x;
+        if (actualBounds) {
+          if (actualBounds.minX < pad) correctionX = pad - actualBounds.minX;
+          else if (actualBounds.maxX > width - pad) correctionX = (width - pad) - actualBounds.maxX;
 
-        if (projected.y < minY) correctionY = minY - projected.y;
-        else if (projected.y > maxY) correctionY = maxY - projected.y;
+          if (actualBounds.minY < pad) correctionY = pad - actualBounds.minY;
+          else if (actualBounds.maxY > height - pad) correctionY = (height - pad) - actualBounds.maxY;
+        } else {
+          const minX = pad + fallbackRadius;
+          const maxX = width - pad - fallbackRadius;
+          const minY = pad + fallbackRadius;
+          const maxY = height - pad - fallbackRadius;
+
+          if (projected.x < minX) correctionX = minX - projected.x;
+          else if (projected.x > maxX) correctionX = maxX - projected.x;
+
+          if (projected.y < minY) correctionY = minY - projected.y;
+          else if (projected.y > maxY) correctionY = maxY - projected.y;
+        }
 
         if (correctionX === 0 && correctionY === 0) return;
 
@@ -1296,20 +1369,30 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           z: center.z + obj.local.z
         });
         if (corrected) {
-          const correctedRadius = obj.kind === "3d"
-            ? Math.max(Math.max(8, obj.size * corrected.scale) * 2.15, 28)
-            : Math.max(8, obj.size * corrected.scale);
-          const correctedMinX = pad + correctedRadius;
-          const correctedMaxX = width - pad - correctedRadius;
-          const correctedMinY = pad + correctedRadius;
-          const correctedMaxY = height - pad - correctedRadius;
           const correctedWorldPerPixel = 1 / Math.max(corrected.scale, 0.0001);
+          const correctedBounds = projectedObjectBounds(center, obj);
 
-          if (corrected.x < correctedMinX) obj.local.x += (correctedMinX - corrected.x) * correctedWorldPerPixel;
-          else if (corrected.x > correctedMaxX) obj.local.x += (correctedMaxX - corrected.x) * correctedWorldPerPixel;
+          if (correctedBounds) {
+            if (correctedBounds.minX < pad) obj.local.x += (pad - correctedBounds.minX) * correctedWorldPerPixel;
+            else if (correctedBounds.maxX > width - pad) obj.local.x += ((width - pad) - correctedBounds.maxX) * correctedWorldPerPixel;
 
-          if (corrected.y < correctedMinY) obj.local.y -= (correctedMinY - corrected.y) * correctedWorldPerPixel;
-          else if (corrected.y > correctedMaxY) obj.local.y -= (correctedMaxY - corrected.y) * correctedWorldPerPixel;
+            if (correctedBounds.minY < pad) obj.local.y -= (pad - correctedBounds.minY) * correctedWorldPerPixel;
+            else if (correctedBounds.maxY > height - pad) obj.local.y -= ((height - pad) - correctedBounds.maxY) * correctedWorldPerPixel;
+          } else {
+            const correctedRadius = obj.kind === "3d"
+              ? Math.max(Math.max(8, obj.size * corrected.scale) * 2.5, 32)
+              : Math.max(8, obj.size * corrected.scale);
+            const correctedMinX = pad + correctedRadius;
+            const correctedMaxX = width - pad - correctedRadius;
+            const correctedMinY = pad + correctedRadius;
+            const correctedMaxY = height - pad - correctedRadius;
+
+            if (corrected.x < correctedMinX) obj.local.x += (correctedMinX - corrected.x) * correctedWorldPerPixel;
+            else if (corrected.x > correctedMaxX) obj.local.x += (correctedMaxX - corrected.x) * correctedWorldPerPixel;
+
+            if (corrected.y < correctedMinY) obj.local.y -= (correctedMinY - corrected.y) * correctedWorldPerPixel;
+            else if (corrected.y > correctedMaxY) obj.local.y -= (correctedMaxY - corrected.y) * correctedWorldPerPixel;
+          }
         }
 
         if (correctionX !== 0) obj.velocity.x *= -restitution;
@@ -1319,7 +1402,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       function solveObjectBounds(center: Vec3, obj: SceneObject) {
         // Sphere and viewport constraints can push against one another. Resolve
         // them together for a few bounded passes instead of letting the last one win.
-        for (let pass = 0; pass < 3; pass++) {
+        for (let pass = 0; pass < 5; pass++) {
           enforceHemisphere(obj);
           if (presentationSettings.collisions.sphereInside.enabled) {
             constrainToSphere(obj);
