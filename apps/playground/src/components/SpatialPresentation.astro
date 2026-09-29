@@ -84,27 +84,28 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   const canvas = document.getElementById("prism-rail-canvas");
   const glbCanvas = document.getElementById("glb-layer");
 
-  let threeRenderer: THREE.WebGLRenderer | null = null;
-  let threeScene: THREE.Scene | null = null;
-  let threeCamera: THREE.PerspectiveCamera | null = null;
+  let threeRenderer: any = null;
+  let threeScene: any = null;
+  let threeCamera: any = null;
   let gltfLoader: any = null;
-  const threeObjects = new Map<string, THREE.Object3D>();
+  const threeObjects = new Map<string, any>();
   const threeLoading = new Set<string>();
-  const occluders = new Map<number, THREE.Mesh>();
+  const occluders = new Map<number, any>();
 
   function ensureThree() {
     if (threeRenderer || !(glbCanvas instanceof HTMLCanvasElement)) return;
-    threeScene = new THREE.Scene();
-    threeCamera = new THREE.PerspectiveCamera(50, 1, 0.05, 250);
-    threeRenderer = new THREE.WebGLRenderer({
+    const T3: any = THREE;
+    threeScene = new T3.Scene();
+    threeCamera = new T3.PerspectiveCamera(50, 1, 0.05, 250);
+    threeRenderer = new T3.WebGLRenderer({
       canvas: glbCanvas,
       alpha: true,
       antialias: true
     });
     threeRenderer.setClearColor(0x000000, 0);
     threeRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    threeScene.add(new THREE.HemisphereLight(0xffffff, 0x30343b, 2.2));
-    const key = new THREE.DirectionalLight(0xffffff, 2.6);
+    threeScene.add(new T3.HemisphereLight(0xffffff, 0x30343b, 2.2));
+    const key: any = new T3.DirectionalLight(0xffffff, 2.6);
     key.position.set(5, 8, 6);
     threeScene.add(key);
     gltfLoader = new (GLTFLoader as any)();
@@ -116,15 +117,16 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     gltfLoader.load(
       obj.url,
       (gltf: any) => {
-        const root = gltf.scene;
-        const box = new THREE.Box3().setFromObject(root);
-        const center = box.getCenter(new THREE.Vector3());
-        const size = box.getSize(new THREE.Vector3());
+        const T3: any = THREE;
+        const root: any = gltf.scene;
+        const box: any = new T3.Box3().setFromObject(root);
+        const center: any = box.getCenter(new T3.Vector3());
+        const size: any = box.getSize(new T3.Vector3());
         const maxDimension = Math.max(size.x, size.y, size.z) || 1;
         root.position.sub(center);
         root.scale.setScalar(2 / maxDimension);
 
-        const group = new THREE.Group();
+        const group: any = new T3.Group();
         group.add(root);
         group.visible = false;
         threeScene.add(group);
@@ -141,16 +143,17 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
   function ensureImageOccluder(stationIndex: number, center: Vec3) {
     if (!threeScene) return null;
-    let mesh = occluders.get(stationIndex);
+    const T3: any = THREE;
+    let mesh: any = occluders.get(stationIndex);
     if (!mesh) {
-      const geometry = new THREE.PlaneGeometry(5.4, 5.9);
-      const material = new THREE.MeshBasicMaterial({
+      const geometry: any = new T3.PlaneGeometry(5.4, 5.9);
+      const material: any = new T3.MeshBasicMaterial({
         colorWrite: false,
         depthWrite: true,
         depthTest: true,
-        side: THREE.DoubleSide
+        side: T3.DoubleSide
       });
-      mesh = new THREE.Mesh(geometry, material);
+      mesh = new T3.Mesh(geometry, material);
       mesh.renderOrder = -1000;
       threeScene.add(mesh);
       occluders.set(stationIndex, mesh);
