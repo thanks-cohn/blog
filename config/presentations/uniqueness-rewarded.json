@@ -68,7 +68,9 @@
     "assetRange": {
       "minDistanceFromCenter": 4.2,
       "maxDistanceFromCenter": 6.4,
-      "sphereDiameter": 12.8
+      "sphereDiameter": 12.8,
+      "frontDiameter": 12.8,
+      "backDiameter": 12.8
     },
     "collisions": {
       "viewport": {
@@ -77,7 +79,9 @@
         "paddingPx": 18
       },
       "sphereInside": {
-        "enabled": false
+        "enabled": true,
+        "boundary": "outer-surface",
+        "restitution": 0.5
       }
     },
     "assetHemisphere": {
