@@ -66,52 +66,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       <button type="button" id="sphere-settings-close" class="sphere-settings-close" aria-label="Close settings">×</button>
     </div>
 
-    <div class="sphere-diameter-control">
-      <span>Sphere geometry</span>
-      <div class="sphere-diameter-row">
-        <label>
-          <span>Diameter</span>
-          <input id="sphere-diameter-input" type="number" min="0.2" step="0.2" inputmode="decimal" />
-        </label>
-        <label>
-          <span>Circumference</span>
-          <input id="sphere-circumference-input" type="number" min="0.2" step="0.2" inputmode="decimal" />
-        </label>
-      </div>
-      <span class="sphere-diameter-note">The image is the sphere center. Front and Back are its two halves.</span>
-    </div>
-
-    <label class="sphere-asset-add">
-      <span>Camera position</span>
-      <select id="camera-placement-select">
-        <option value="outside">Outside sphere</option>
-        <option value="inside">Inside sphere</option>
-      </select>
-    </label>
-
-    <label class="sphere-viewport-toggle">
-      <input id="viewport-containment-toggle" type="checkbox" />
-      <span>
-        <strong>Keep assets in viewport</strong>
-        <small>Second rule: visible geometry cannot leave the screen.</small>
-      </span>
-    </label>
-
-    <div class="sphere-debug-controls">
-      <label class="sphere-asset-add">
-        <span>Debug globe</span>
-        <select id="glb-debug-enabled-select">
-          <option value="off">Off</option>
-          <option value="on">On</option>
-        </select>
-      </label>
-      <label class="sphere-asset-add">
-        <span>GLB object</span>
-        <select id="glb-debug-object-select">
-          <option value="">Choose GLB…</option>
-        </select>
-      </label>
-    </div>
+    <div id="api-settings-controls" class="api-settings-controls"></div>
 
     <label class="sphere-asset-add">
       <span>Add / restore asset</span>
@@ -228,6 +183,19 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     };
   };
   type SettingsListener = (settings: PresentationSettingsSnapshot) => void;
+  type SettingOption = { value: string; label: string };
+  type SettingDescriptor = {
+    key: PresentationSettingKey;
+    label: string;
+    group: "sphere" | "camera" | "viewport" | "debug";
+    control: "number" | "select" | "toggle";
+    description?: string;
+    min?: number;
+    max?: number;
+    step?: number;
+    readOnly?: boolean;
+    options?: SettingOption[];
+  };
 
   declare global {
     interface Window {
@@ -236,7 +204,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         set(key: PresentationSettingKey, value: PresentationSettingValue): PresentationSettingsSnapshot;
         reset(key?: PresentationSettingKey): PresentationSettingsSnapshot;
         subscribe(listener: SettingsListener): () => void;
-        listAssets(stationId?: string): Array<{ name: string; hemisphere: AssetHemisphere; visible: boolean; motion: ObjectMotion }>;
+        describeSettings(stationId?: string): SettingDescriptor[];
+        listAssets(stationId?: string): Array<{ name: string; hemisphere: AssetHemisphere; visible: boolean; motion: ObjectMotion; kind: "2d" | "3d"; uploaded: boolean }>;
         setAssetHemisphere(name: string, hemisphere: AssetHemisphere): void;
         setAssetVisible(name: string, visible: boolean): void;
         getAssetMotion(name: string): ObjectMotion | null;
@@ -254,12 +223,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   const settingsClose = document.getElementById("sphere-settings-close") as HTMLButtonElement | null;
   const sphereSizeReadout = document.getElementById("sphere-size-readout");
   const stationSettingsTitle = document.getElementById("station-settings-title");
-  const sphereDiameterInput = document.getElementById("sphere-diameter-input") as HTMLInputElement | null;
-  const sphereCircumferenceInput = document.getElementById("sphere-circumference-input") as HTMLInputElement | null;
-  const cameraPlacementSelect = document.getElementById("camera-placement-select") as HTMLSelectElement | null;
-  const viewportContainmentToggle = document.getElementById("viewport-containment-toggle") as HTMLInputElement | null;
-  const glbDebugEnabledSelect = document.getElementById("glb-debug-enabled-select") as HTMLSelectElement | null;
-  const glbDebugObjectSelect = document.getElementById("glb-debug-object-select") as HTMLSelectElement | null;
+  const apiSettingsControls = document.getElementById("api-settings-controls");
   const assetPicker = document.getElementById("sphere-asset-picker") as HTMLSelectElement | null;
   const frontAssetsList = document.getElementById("front-assets-list");
   const backAssetsList = document.getElementById("back-assets-list");
@@ -410,12 +374,17 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     const stationDefinitions = Array.isArray(config.stations) ? config.stations : [];
 
     function allSceneAssetNames() {
-      const result: Array<{ name: string; stationId: string }> = [];
+      const result: Array<{ name: string; stationId: string; kind: "2d" | "3d"; uploaded: boolean }> = [];
       for (const station of stationDefinitions) {
         const assets = Array.isArray(config.assetsByArtwork?.[station.artworkName])
           ? config.assetsByArtwork[station.artworkName]
           : [];
-        for (const asset of assets) result.push({ name: asset.name, stationId: station.id });
+        for (const asset of assets) result.push({
+          name: asset.name,
+          stationId: station.id,
+          kind: asset.kind === "2d" ? "2d" : "3d",
+          uploaded: true
+        });
 
         const requestedDisplayMode = station.assetDisplayMode ?? config.arrangement?.assetDisplayMode;
         const displayMode = requestedDisplayMode === "assets-and-proxies"
@@ -430,7 +399,12 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           : 0;
         const extraProxyCount = displayMode === "assets-and-proxies" ? proxyCount : fallbackProxyCount;
         for (let i = 0; i < extraProxyCount; i++) {
-          result.push({ name: `${station.artworkName}-proxy-${i + 1}`, stationId: station.id });
+          result.push({
+            name: `${station.artworkName}-proxy-${i + 1}`,
+            stationId: station.id,
+            kind: "3d",
+            uploaded: false
+          });
         }
       }
       return result;
@@ -699,6 +673,74 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       normalizeCameraForSphere(presentationSettings);
     }
 
+    function describeSettingsForStation(stationId = activeStationId): SettingDescriptor[] {
+      const glbOptions: SettingOption[] = [
+        { value: "", label: "Choose GLB…" },
+        ...allSceneAssetNames()
+          .filter((asset) => asset.stationId === stationId && asset.kind === "3d" && asset.uploaded)
+          .map((asset) => ({ value: asset.name, label: asset.name }))
+      ];
+
+      return [
+        {
+          key: "sphere.diameter",
+          label: "Sphere diameter",
+          group: "sphere",
+          control: "number",
+          description: "Image is the exact center of the sphere.",
+          min: 0.2,
+          step: 0.2
+        },
+        {
+          key: "sphere.circumference",
+          label: "Sphere circumference",
+          group: "sphere",
+          control: "number",
+          min: 0.2,
+          step: 0.2
+        },
+        {
+          key: "sphere.radius",
+          label: "Sphere radius",
+          group: "sphere",
+          control: "number",
+          readOnly: true,
+          step: 0.01
+        },
+        {
+          key: "camera.placement",
+          label: "Camera position",
+          group: "camera",
+          control: "select",
+          options: [
+            { value: "outside", label: "Outside sphere" },
+            { value: "inside", label: "Inside sphere" }
+          ]
+        },
+        {
+          key: "viewport.enabled",
+          label: "Keep assets in viewport",
+          group: "viewport",
+          control: "toggle",
+          description: "Second rule: visible geometry cannot leave the screen."
+        },
+        {
+          key: "debug.glbGlobe.enabled",
+          label: "Debug globe",
+          group: "debug",
+          control: "toggle",
+          description: "Draw a transparent sphere where the engine believes the selected GLB exists."
+        },
+        {
+          key: "debug.glbGlobe.objectName",
+          label: "Debug GLB object",
+          group: "debug",
+          control: "select",
+          options: glbOptions
+        }
+      ];
+    }
+
     window.webrevPresentationSettings = {
       get(key?: PresentationSettingKey) {
         if (key === "camera.mode") return presentationSettings.camera.mode;
@@ -782,20 +824,26 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         listener(cloneSettings(presentationSettings));
         return () => settingsListeners.delete(listener);
       },
+      describeSettings(stationId?: string) {
+        return describeSettingsForStation(stationId ?? activeStationId);
+      },
       listAssets(stationId?: string) {
         const targetStationId = stationId ?? activeStationId;
-        const names = new Set(
-          allSceneAssetNames()
-            .filter((asset) => asset.stationId === targetStationId)
-            .map((asset) => asset.name)
-        );
-        return Object.entries(assetPlacement)
-          .filter(([name]) => names.has(name))
-          .map(([name, state]) => ({
-            name,
+        const inventory = allSceneAssetNames()
+          .filter((asset) => asset.stationId === targetStationId);
+        return inventory.map((asset) => {
+          const state = assetPlacement[asset.name] ?? {
+            hemisphere: "front" as AssetHemisphere,
+            visible: true
+          };
+          return {
+            name: asset.name,
             ...state,
-            motion: assetMotionState[name] ?? configuredMotionFor(name)
-          }));
+            motion: assetMotionState[asset.name] ?? configuredMotionFor(asset.name),
+            kind: asset.kind,
+            uploaded: asset.uploaded
+          };
+        });
       },
       setAssetHemisphere(name: string, hemisphere: AssetHemisphere) {
         assetPlacement[name] ??= { hemisphere: "front", visible: true };
@@ -964,55 +1012,203 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         return row;
       }
 
+      function currentApiValue(key: PresentationSettingKey) {
+        return window.webrevPresentationSettings?.get(key);
+      }
+
+      function setApiValue(key: PresentationSettingKey, value: PresentationSettingValue) {
+        window.webrevPresentationSettings?.set(key, value);
+      }
+
+      function renderApiSettingsControls() {
+        if (!apiSettingsControls) return;
+        const api = window.webrevPresentationSettings;
+        if (!api) return;
+
+        apiSettingsControls.replaceChildren();
+        const descriptors = api.describeSettings(activeStationId);
+        let currentGroup = "";
+
+        for (const descriptor of descriptors) {
+          if (descriptor.group !== currentGroup) {
+            currentGroup = descriptor.group;
+            const heading = document.createElement("div");
+            heading.className = "api-settings-group-title";
+            heading.textContent =
+              descriptor.group === "sphere" ? "Sphere geometry" :
+              descriptor.group === "camera" ? "Camera" :
+              descriptor.group === "viewport" ? "Viewport" :
+              "Debug";
+            apiSettingsControls.appendChild(heading);
+          }
+
+          const row = document.createElement("label");
+          row.className = descriptor.control === "toggle"
+            ? "api-setting-row api-setting-toggle"
+            : "api-setting-row";
+
+          const textWrap = document.createElement("span");
+          textWrap.className = "api-setting-copy";
+          const label = document.createElement("strong");
+          label.textContent = descriptor.label;
+          textWrap.appendChild(label);
+          if (descriptor.description) {
+            const description = document.createElement("small");
+            description.textContent = descriptor.description;
+            textWrap.appendChild(description);
+          }
+
+          const current = currentApiValue(descriptor.key);
+
+          if (descriptor.control === "toggle") {
+            const input = document.createElement("input");
+            input.type = "checkbox";
+            input.checked = Boolean(current);
+            input.addEventListener("change", () => setApiValue(descriptor.key, input.checked));
+            row.append(input, textWrap);
+          } else if (descriptor.control === "select") {
+            const select = document.createElement("select");
+            select.className = "api-setting-control";
+            for (const choice of descriptor.options ?? []) {
+              const option = document.createElement("option");
+              option.value = choice.value;
+              option.textContent = choice.label;
+              option.selected = String(current ?? "") === choice.value;
+              select.appendChild(option);
+            }
+            select.disabled = Boolean(descriptor.readOnly);
+            select.addEventListener("change", () => setApiValue(descriptor.key, select.value));
+            row.append(textWrap, select);
+          } else {
+            const input = document.createElement("input");
+            input.className = "api-setting-control";
+            input.type = "number";
+            if (descriptor.min != null) input.min = String(descriptor.min);
+            if (descriptor.max != null) input.max = String(descriptor.max);
+            if (descriptor.step != null) input.step = String(descriptor.step);
+            input.readOnly = Boolean(descriptor.readOnly);
+            input.value = Number(current ?? 0).toFixed(descriptor.step && descriptor.step < 0.1 ? 2 : 1);
+            const commit = () => {
+              if (descriptor.readOnly) return;
+              const value = Number(input.value);
+              if (Number.isFinite(value)) setApiValue(descriptor.key, value);
+            };
+            input.addEventListener("change", commit);
+            input.addEventListener("keydown", (event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              commit();
+            });
+            row.append(textWrap, input);
+          }
+
+          apiSettingsControls.appendChild(row);
+        }
+      }
+
+      function makeAssetRowFromApi(asset: ReturnType<NonNullable<typeof window.webrevPresentationSettings>["listAssets"]>[number]) {
+        const row = document.createElement("div");
+        row.className = "sphere-asset-row";
+
+        const name = document.createElement("span");
+        name.className = "sphere-asset-name";
+        name.textContent = asset.name;
+
+        const side = document.createElement("select");
+        side.className = "sphere-side-select";
+        side.setAttribute("aria-label", `Placement for ${asset.name}`);
+        for (const value of ["front", "back"] as const) {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = value === "front" ? "Front" : "Back";
+          option.selected = asset.hemisphere === value;
+          side.appendChild(option);
+        }
+        side.addEventListener("change", () => {
+          window.webrevPresentationSettings?.setAssetHemisphere(
+            asset.name,
+            side.value === "back" ? "back" : "front"
+          );
+        });
+
+        const motionSelect = document.createElement("select");
+        motionSelect.className = "sphere-motion-select";
+        motionSelect.setAttribute("aria-label", `Motion for ${asset.name}`);
+        const currentMotionValue =
+          asset.motion.type === "free"
+            ? "free"
+            : asset.motion.fixedMode === "range"
+              ? "fixed-range"
+              : "fixed-anchored";
+        for (const [value, label] of [
+          ["free", "Free"],
+          ["fixed-anchored", "Fixed"],
+          ["fixed-range", "Fixed range"]
+        ] as const) {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = label;
+          option.selected = value === currentMotionValue;
+          motionSelect.appendChild(option);
+        }
+        motionSelect.addEventListener("change", () => {
+          if (motionSelect.value === "free") {
+            window.webrevPresentationSettings?.setAssetMotion(asset.name, { type: "free" });
+          } else if (motionSelect.value === "fixed-range") {
+            window.webrevPresentationSettings?.setAssetMotion(asset.name, {
+              type: "fixed",
+              fixedMode: "range",
+              range: 0.8,
+              behavior: { type: "bob", amplitude: 0.35, speed: 0.7 }
+            });
+          } else {
+            window.webrevPresentationSettings?.setAssetMotion(asset.name, {
+              type: "fixed",
+              fixedMode: "anchored",
+              behavior: { type: "none" }
+            });
+          }
+        });
+
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "sphere-asset-remove";
+        remove.setAttribute("aria-label", `Hide ${asset.name}`);
+        remove.textContent = "×";
+        remove.addEventListener("click", () => {
+          window.webrevPresentationSettings?.setAssetVisible(asset.name, false);
+        });
+
+        row.append(name, side, motionSelect, remove);
+        return row;
+      }
+
       function renderSphereSettings() {
         if (!frontAssetsList || !backAssetsList || !assetPicker || !sphereSizeReadout) return;
+        const api = window.webrevPresentationSettings;
+        if (!api) return;
+
         const currentStation = stations[arrivingAt];
         if (stationSettingsTitle) {
           stationSettingsTitle.textContent = `${currentStation?.label ?? "Section"} settings`;
         }
+        const snapshot = api.get() as PresentationSettingsSnapshot;
         sphereSizeReadout.textContent =
-          `Radius ${presentationSettings.sphere.radius.toFixed(2)} · collision boundary = sphere surface`;
-        if (sphereDiameterInput && document.activeElement !== sphereDiameterInput) {
-          sphereDiameterInput.value = presentationSettings.sphere.diameter.toFixed(2);
-        }
-        if (sphereCircumferenceInput && document.activeElement !== sphereCircumferenceInput) {
-          sphereCircumferenceInput.value = presentationSettings.sphere.circumference.toFixed(2);
-        }
-        if (cameraPlacementSelect) {
-          cameraPlacementSelect.value = presentationSettings.camera.placement;
-        }
-        if (viewportContainmentToggle) {
-          viewportContainmentToggle.checked = presentationSettings.viewport.enabled;
-        }
-        if (glbDebugEnabledSelect) {
-          glbDebugEnabledSelect.value = presentationSettings.debug.glbGlobe.enabled ? "on" : "off";
-        }
-        if (glbDebugObjectSelect) {
-          glbDebugObjectSelect.replaceChildren();
-          const prompt = document.createElement("option");
-          prompt.value = "";
-          prompt.textContent = "Choose GLB…";
-          glbDebugObjectSelect.appendChild(prompt);
-          for (const obj of (layouts[arrivingAt] ?? []).filter((item: SceneObject) => item.kind === "3d" && Boolean(item.url))) {
-            const option = document.createElement("option");
-            option.value = obj.name;
-            option.textContent = obj.name;
-            option.selected = obj.name === presentationSettings.debug.glbGlobe.objectName;
-            glbDebugObjectSelect.appendChild(option);
-          }
-        }
+          `Radius ${snapshot.sphere.radius.toFixed(2)} · collision boundary = sphere surface`;
+
+        renderApiSettingsControls();
 
         frontAssetsList.replaceChildren();
         backAssetsList.replaceChildren();
 
-        const currentLayout = layouts[arrivingAt] ?? [];
-        const hidden = currentLayout.filter((obj: SceneObject) => obj.visible === false);
+        const assets = api.listAssets(activeStationId);
+        const hidden = assets.filter((asset) => asset.visible === false);
 
-        for (const obj of currentLayout.filter((obj: SceneObject) => obj.visible !== false && obj.hemisphere !== "back")) {
-          frontAssetsList.appendChild(makeAssetRow(obj));
+        for (const asset of assets.filter((asset) => asset.visible !== false && asset.hemisphere !== "back")) {
+          frontAssetsList.appendChild(makeAssetRowFromApi(asset));
         }
-        for (const obj of currentLayout.filter((obj: SceneObject) => obj.visible !== false && obj.hemisphere === "back")) {
-          backAssetsList.appendChild(makeAssetRow(obj));
+        for (const asset of assets.filter((asset) => asset.visible !== false && asset.hemisphere === "back")) {
+          backAssetsList.appendChild(makeAssetRowFromApi(asset));
         }
 
         assetPicker.replaceChildren();
@@ -1020,10 +1216,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         prompt.value = "";
         prompt.textContent = hidden.length ? "Choose an asset…" : "All assets are displayed";
         assetPicker.appendChild(prompt);
-        for (const obj of hidden) {
+        for (const asset of hidden) {
           const option = document.createElement("option");
-          option.value = obj.name;
-          option.textContent = obj.name;
+          option.value = asset.name;
+          option.textContent = asset.name;
           assetPicker.appendChild(option);
         }
         assetPicker.disabled = hidden.length === 0;
@@ -1047,77 +1243,6 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         window.webrevPresentationSettings?.setAssetHemisphere(name, "front");
         window.webrevPresentationSettings?.setAssetVisible(name, true);
         assetPicker.value = "";
-      });
-      function commitSphereInput(
-        input: HTMLInputElement,
-        key: "sphere.diameter" | "sphere.circumference",
-        fallback: () => number
-      ) {
-        const value = Number(input.value);
-        if (!Number.isFinite(value) || value <= 0) {
-          input.value = fallback().toFixed(2);
-          return;
-        }
-        window.webrevPresentationSettings?.set(key, value);
-      }
-
-      sphereDiameterInput?.addEventListener("change", () => {
-        commitSphereInput(
-          sphereDiameterInput,
-          "sphere.diameter",
-          () => presentationSettings.sphere.diameter
-        );
-      });
-      sphereDiameterInput?.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter") return;
-        event.preventDefault();
-        commitSphereInput(
-          sphereDiameterInput,
-          "sphere.diameter",
-          () => presentationSettings.sphere.diameter
-        );
-      });
-
-      sphereCircumferenceInput?.addEventListener("change", () => {
-        commitSphereInput(
-          sphereCircumferenceInput,
-          "sphere.circumference",
-          () => presentationSettings.sphere.circumference
-        );
-      });
-      sphereCircumferenceInput?.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter") return;
-        event.preventDefault();
-        commitSphereInput(
-          sphereCircumferenceInput,
-          "sphere.circumference",
-          () => presentationSettings.sphere.circumference
-        );
-      });
-
-      cameraPlacementSelect?.addEventListener("change", () => {
-        window.webrevPresentationSettings?.set(
-          "camera.placement",
-          cameraPlacementSelect.value === "inside" ? "inside" : "outside"
-        );
-      });
-      viewportContainmentToggle?.addEventListener("change", () => {
-        window.webrevPresentationSettings?.set(
-          "viewport.enabled",
-          viewportContainmentToggle.checked
-        );
-      });
-      glbDebugEnabledSelect?.addEventListener("change", () => {
-        window.webrevPresentationSettings?.set(
-          "debug.glbGlobe.enabled",
-          glbDebugEnabledSelect.value === "on"
-        );
-      });
-      glbDebugObjectSelect?.addEventListener("change", () => {
-        window.webrevPresentationSettings?.set(
-          "debug.glbGlobe.objectName",
-          glbDebugObjectSelect.value
-        );
       });
       window.addEventListener("webrev:presentation-settings", () => {
         stationSettings[activeStationId] = presentationSettings;
@@ -2367,11 +2492,62 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     font-size:11px;
   }
 
-  .sphere-debug-controls {
+  .api-settings-controls {
     display:grid;
-    grid-template-columns:1fr 1fr;
+    gap:8px;
+    margin-bottom:16px;
+  }
+
+  .api-settings-group-title {
+    margin-top:8px;
+    color:rgba(255,255,255,.58);
+    font-size:10px;
+    font-weight:700;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+  }
+
+  .api-setting-row {
+    display:grid;
+    grid-template-columns:minmax(0,1fr) 132px;
+    align-items:center;
     gap:10px;
-    margin-bottom:4px;
+    padding:9px 10px;
+    border:1px solid rgba(255,255,255,.1);
+    border-radius:10px;
+    background:rgba(255,255,255,.035);
+  }
+
+  .api-setting-copy {
+    display:grid;
+    gap:2px;
+  }
+
+  .api-setting-copy strong {
+    font-size:12px;
+    font-weight:600;
+  }
+
+  .api-setting-copy small {
+    color:rgba(255,255,255,.48);
+    font-size:10px;
+    line-height:1.3;
+  }
+
+  .api-setting-control {
+    width:100%;
+    min-height:34px;
+    box-sizing:border-box;
+    border:1px solid rgba(255,255,255,.16);
+    border-radius:8px;
+    background:#15191f;
+    color:#fff;
+    padding:0 8px;
+  }
+
+  .api-setting-toggle {
+    grid-template-columns:auto minmax(0,1fr);
+    cursor:pointer;
   }
 
   .sphere-viewport-toggle {
