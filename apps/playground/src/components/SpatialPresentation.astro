@@ -47,6 +47,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   <canvas id="prism-rail-canvas" aria-label="Do It Your Way spatial presentation"></canvas>
   <canvas id="glb-layer" aria-hidden="true"></canvas>
   <div class="sr-only" aria-live="polite" id="presentation-status"></div>
+  <div id="edit-context-menu" class="edit-context-menu" hidden></div>
 
   <button
     type="button"
@@ -104,6 +105,14 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     normalizeObjectMotion,
     type ObjectMotion
   } from "../lib/objectMotion";
+  import {
+    HEMISPHERE_CAMERA_PRESETS,
+    hemisphereEditorCameraPosition,
+    lookAnglesAt,
+    screenBasis,
+    type EditLayerState,
+    type HemisphereCameraPreset
+  } from "../lib/editLayer";
 
   type Vec3 = { x: number; y: number; z: number };
   type Projected = { x: number; y: number; depth: number; scale: number };
@@ -155,7 +164,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
     | "viewport.enabled"
     | "viewport.paddingPx"
     | "debug.glbGlobe.enabled"
-    | "debug.glbGlobe.objectName";
+    | "debug.glbGlobe.objectName"
+    | "editor.mode"
+    | "editor.hemisphere"
+    | "editor.cameraPreset"
+    | "editor.repositionObjectName";
   type PresentationSettingValue = boolean | number | string;
   type AssetHemisphere = "front" | "back";
   type AssetPlacementState = Record<string, { hemisphere: AssetHemisphere; visible: boolean }>;
@@ -181,6 +194,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         objectName: string;
       };
     };
+    editor: EditLayerState;
   };
   type GlbRuntimeStatus = "acknowledged" | "loading" | "loaded" | "retrying" | "failed";
   type SettingsListener = (settings: PresentationSettingsSnapshot) => void;
@@ -188,7 +202,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   type SettingDescriptor = {
     key: PresentationSettingKey;
     label: string;
-    group: "sphere" | "camera" | "viewport" | "debug";
+    group: "sphere" | "camera" | "viewport" | "debug" | "editor";
     control: "number" | "select" | "toggle";
     description?: string;
     min?: number;
@@ -213,6 +227,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         setAssetMotion(name: string, motion: ObjectMotion): void;
         setGlbDebugGlobe(enabled: boolean, objectName?: string): void;
         getAssetRuntimeStatus(name: string): { status: GlbRuntimeStatus; attempts: number; lastError?: string } | null;
+        getEditorState(): EditLayerState;
+        setEditorMode(mode: "none" | "hemisphere", hemisphere?: AssetHemisphere): PresentationSettingsSnapshot;
+        setEditorCameraPreset(preset: HemisphereCameraPreset): PresentationSettingsSnapshot;
+        setRepositionObject(name: string | null): PresentationSettingsSnapshot;
+        listEditorCameraPresets(): Array<{ id: HemisphereCameraPreset; label: string }>;
       };
     }
   }
@@ -229,6 +248,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   const assetPicker = document.getElementById("sphere-asset-picker") as HTMLSelectElement | null;
   const frontAssetsList = document.getElementById("front-assets-list");
   const backAssetsList = document.getElementById("back-assets-list");
+  const editContextMenu = document.getElementById("edit-context-menu") as HTMLDivElement | null;
 
   let threeRenderer: any = null;
   let threeScene: any = null;
@@ -560,7 +580,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             enabled: Boolean(station?.debug?.glbGlobe?.enabled ?? config.arrangement?.debug?.glbGlobe?.enabled ?? false),
             objectName: String(station?.debug?.glbGlobe?.objectName ?? config.arrangement?.debug?.glbGlobe?.objectName ?? "")
           }
-        }
+        },
+        editor: { mode: "none" }
       };
     }
 
@@ -588,7 +609,15 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             enabled: Boolean(source.debug.glbGlobe.enabled),
             objectName: String(source.debug.glbGlobe.objectName ?? "")
           }
-        }
+        },
+        editor: source.editor.mode === "hemisphere"
+          ? {
+              mode: "hemisphere",
+              hemisphere: source.editor.hemisphere,
+              cameraPreset: source.editor.cameraPreset,
+              repositionObjectName: source.editor.repositionObjectName
+            }
+          : { mode: "none" }
       };
     }
 
@@ -649,7 +678,23 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
                 ? raw.debug.glbGlobe.objectName
                 : defaults.debug.glbGlobe.objectName
           }
-        }
+        },
+        editor: raw?.editor?.mode === "hemisphere"
+          ? {
+              mode: "hemisphere",
+              hemisphere: raw?.editor?.hemisphere === "back" ? "back" : "front",
+              cameraPreset:
+                raw?.editor?.cameraPreset === "side" ||
+                raw?.editor?.cameraPreset === "bottom-corner-up" ||
+                raw?.editor?.cameraPreset === "top-left-down"
+                  ? raw.editor.cameraPreset
+                  : "top",
+              repositionObjectName:
+                typeof raw?.editor?.repositionObjectName === "string"
+                  ? raw.editor.repositionObjectName
+                  : ""
+            }
+          : { mode: "none" }
       };
       normalizeCameraForSphere(loaded);
       return loaded;
@@ -789,6 +834,35 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             ? `Runtime: ${selectedStatus}${selectedAttempts ? ` · attempts ${selectedAttempts}` : ""}`
             : "Pick a GLB to inspect.",
           options: glbOptions
+        },
+        {
+          key: "editor.mode",
+          label: "Edit Layer mode",
+          group: "editor",
+          control: "select",
+          description: "Editor modules define their own camera and interaction rules.",
+          options: [
+            { value: "none", label: "Off" },
+            { value: "hemisphere", label: "Hemisphere Editor" }
+          ]
+        },
+        {
+          key: "editor.hemisphere",
+          label: "Hemisphere",
+          group: "editor",
+          control: "select",
+          options: [
+            { value: "front", label: "Front" },
+            { value: "back", label: "Back" }
+          ]
+        },
+        {
+          key: "editor.cameraPreset",
+          label: "Hemisphere camera",
+          group: "editor",
+          control: "select",
+          description: "Hemisphere Editor only: image stays visible and the active half stays spatially useful.",
+          options: HEMISPHERE_CAMERA_PRESETS.map((preset) => ({ value: preset.id, label: preset.label }))
         }
       ];
     }
@@ -806,6 +880,10 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (key === "viewport.paddingPx") return presentationSettings.viewport.paddingPx;
         if (key === "debug.glbGlobe.enabled") return presentationSettings.debug.glbGlobe.enabled;
         if (key === "debug.glbGlobe.objectName") return presentationSettings.debug.glbGlobe.objectName;
+        if (key === "editor.mode") return presentationSettings.editor.mode;
+        if (key === "editor.hemisphere") return presentationSettings.editor.mode === "hemisphere" ? presentationSettings.editor.hemisphere : "front";
+        if (key === "editor.cameraPreset") return presentationSettings.editor.mode === "hemisphere" ? presentationSettings.editor.cameraPreset : "top";
+        if (key === "editor.repositionObjectName") return presentationSettings.editor.mode === "hemisphere" ? presentationSettings.editor.repositionObjectName : "";
         return cloneSettings(presentationSettings);
       },
       set(key: PresentationSettingKey, value: PresentationSettingValue) {
@@ -840,6 +918,25 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           presentationSettings.debug.glbGlobe.enabled = Boolean(value);
         } else if (key === "debug.glbGlobe.objectName") {
           presentationSettings.debug.glbGlobe.objectName = String(value ?? "");
+        } else if (key === "editor.mode") {
+          presentationSettings.editor = value === "hemisphere"
+            ? { mode: "hemisphere", hemisphere: "front", cameraPreset: "top", repositionObjectName: "" }
+            : { mode: "none" };
+        } else if (key === "editor.hemisphere") {
+          if (presentationSettings.editor.mode === "hemisphere") {
+            presentationSettings.editor.hemisphere = value === "back" ? "back" : "front";
+          }
+        } else if (key === "editor.cameraPreset") {
+          if (presentationSettings.editor.mode === "hemisphere") {
+            presentationSettings.editor.cameraPreset =
+              value === "side" || value === "bottom-corner-up" || value === "top-left-down"
+                ? value
+                : "top";
+          }
+        } else if (key === "editor.repositionObjectName") {
+          if (presentationSettings.editor.mode === "hemisphere") {
+            presentationSettings.editor.repositionObjectName = String(value ?? "");
+          }
         }
         return publishSettings();
       },
@@ -868,6 +965,9 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (key === "viewport.paddingPx") presentationSettings.viewport.paddingPx = defaults.viewport.paddingPx;
         if (key === "debug.glbGlobe.enabled") presentationSettings.debug.glbGlobe.enabled = defaults.debug.glbGlobe.enabled;
         if (key === "debug.glbGlobe.objectName") presentationSettings.debug.glbGlobe.objectName = defaults.debug.glbGlobe.objectName;
+        if (key === "editor.mode" || key === "editor.hemisphere" || key === "editor.cameraPreset" || key === "editor.repositionObjectName") {
+          presentationSettings.editor = { mode: "none" };
+        }
         normalizeCameraForSphere(presentationSettings);
         return publishSettings();
       },
@@ -944,6 +1044,44 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
             .reduce((max, [, attempts]) => Math.max(max, attempts), 0),
           lastError: glbRuntimeError.get(name)
         };
+      },
+      getEditorState() {
+        return presentationSettings.editor.mode === "hemisphere"
+          ? { ...presentationSettings.editor }
+          : { mode: "none" };
+      },
+      setEditorMode(mode: "none" | "hemisphere", hemisphere?: AssetHemisphere) {
+        presentationSettings.editor = mode === "hemisphere"
+          ? {
+              mode: "hemisphere",
+              hemisphere: hemisphere === "back" ? "back" : "front",
+              cameraPreset: "top",
+              repositionObjectName: ""
+            }
+          : { mode: "none" };
+        return publishSettings();
+      },
+      setEditorCameraPreset(preset: HemisphereCameraPreset) {
+        if (presentationSettings.editor.mode === "hemisphere") {
+          presentationSettings.editor.cameraPreset =
+            preset === "side" || preset === "bottom-corner-up" || preset === "top-left-down"
+              ? preset
+              : "top";
+        }
+        return publishSettings();
+      },
+      setRepositionObject(name: string | null) {
+        if (presentationSettings.editor.mode === "hemisphere") {
+          presentationSettings.editor.repositionObjectName = name ?? "";
+          if (name) {
+            const asset = assetPlacement[name];
+            if (asset) presentationSettings.editor.hemisphere = asset.hemisphere;
+          }
+        }
+        return publishSettings();
+      },
+      listEditorCameraPresets() {
+        return HEMISPHERE_CAMERA_PRESETS.map((preset) => ({ ...preset }));
       }
     };
 
@@ -1111,7 +1249,8 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
               descriptor.group === "sphere" ? "Sphere geometry" :
               descriptor.group === "camera" ? "Camera" :
               descriptor.group === "viewport" ? "Viewport" :
-              "Debug";
+              descriptor.group === "debug" ? "Debug" :
+              "Edit Layer";
             apiSettingsControls.appendChild(heading);
           }
 
@@ -1613,6 +1752,19 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         return { x: railPoint.x, y: railPoint.y + 0.9, z };
       }
 
+      function hemisphereEditorPose() {
+        if (presentationSettings.editor.mode !== "hemisphere") return null;
+        const center = stationCenter(arrivingAt);
+        const position = hemisphereEditorCameraPosition(
+          center,
+          presentationSettings.sphere.radius,
+          presentationSettings.editor.cameraPreset,
+          presentationSettings.editor.hemisphere
+        );
+        const angles = lookAnglesAt(center, position);
+        return { center, position, ...angles };
+      }
+
       function resize() {
         const rect = gameCanvas.getBoundingClientRect();
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -1658,6 +1810,9 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       }
 
       function cameraPosition(): Vec3 {
+        const editPose = hemisphereEditorPose();
+        if (editPose) return editPose.position;
+
         const center = stationCenter(arrivingAt);
         const animatedDistance = cameraZ - stationZ(arrivingAt);
         const distance = presentationSettings.camera.placement === "outside"
@@ -2217,7 +2372,11 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
       }
 
       function update(now: number, dt: number) {
-        if (presentationSettings.camera.mode === "locked") {
+        const editPose = hemisphereEditorPose();
+        if (editPose) {
+          targetYaw = editPose.yaw;
+          targetPitch = editPose.pitch;
+        } else if (presentationSettings.camera.mode === "locked") {
           targetYaw = 0;
           targetPitch = 0;
         }
@@ -2251,7 +2410,9 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
               ? " · move mouse to look"
               : " · move mouse for free look";
         const hint = arrived()
-          ? `Click the paper to present it · drag or toss floating objects${mouseHint} · ← → ride`
+          ? presentationSettings.editor.mode === "hemisphere"
+            ? `HEMISPHERE EDITOR · ${presentationSettings.editor.hemisphere.toUpperCase()} · right-click for cameras/reposition`
+            : `Click the paper to present it · drag or toss floating objects${mouseHint} · ← → ride`
           : "Riding the thread…";
 
         ctx.textAlign = "center";
@@ -2309,6 +2470,97 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         return !!rect && x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
       }
 
+      function closeEditContextMenu() {
+        if (editContextMenu) editContextMenu.hidden = true;
+      }
+
+      function addEditContextAction(label: string, action: () => void, active = false) {
+        if (!editContextMenu) return;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = active ? "edit-context-action is-active" : "edit-context-action";
+        button.textContent = label;
+        button.addEventListener("click", () => {
+          action();
+          closeEditContextMenu();
+        });
+        editContextMenu.appendChild(button);
+      }
+
+      function openEditContextMenu(clientX: number, clientY: number, obj: SceneObject | null) {
+        if (!editContextMenu) return;
+        const api = window.webrevPresentationSettings;
+        if (!api) return;
+
+        editContextMenu.replaceChildren();
+        const editor = api.getEditorState();
+
+        addEditContextAction(
+          "Hemisphere Editor · Front",
+          () => api.setEditorMode("hemisphere", "front"),
+          editor.mode === "hemisphere" && editor.hemisphere === "front"
+        );
+        addEditContextAction(
+          "Hemisphere Editor · Back",
+          () => api.setEditorMode("hemisphere", "back"),
+          editor.mode === "hemisphere" && editor.hemisphere === "back"
+        );
+        addEditContextAction(
+          "Exit Edit Layer",
+          () => api.setEditorMode("none"),
+          editor.mode === "none"
+        );
+
+        if (obj) {
+          const repositioning =
+            editor.mode === "hemisphere" &&
+            editor.repositionObjectName === obj.name;
+          addEditContextAction(
+            `Reposition ${repositioning ? "OFF" : "ON"} · ${obj.name}`,
+            () => {
+              if (editor.mode !== "hemisphere") {
+                api.setEditorMode("hemisphere", obj.hemisphere === "back" ? "back" : "front");
+              }
+              api.setRepositionObject(repositioning ? null : obj.name);
+            },
+            repositioning
+          );
+        }
+
+        const heading = document.createElement("div");
+        heading.className = "edit-context-heading";
+        heading.textContent = "Hemisphere camera";
+        editContextMenu.appendChild(heading);
+
+        for (const preset of api.listEditorCameraPresets()) {
+          addEditContextAction(
+            preset.label,
+            () => {
+              if (api.getEditorState().mode !== "hemisphere") api.setEditorMode("hemisphere", "front");
+              api.setEditorCameraPreset(preset.id);
+            },
+            editor.mode === "hemisphere" && editor.cameraPreset === preset.id
+          );
+        }
+
+        editContextMenu.style.left = `${Math.max(8, Math.min(window.innerWidth - 270, clientX))}px`;
+        editContextMenu.style.top = `${Math.max(8, Math.min(window.innerHeight - 340, clientY))}px`;
+        editContextMenu.hidden = false;
+      }
+
+      gameCanvas.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        const rect = gameCanvas.getBoundingClientRect();
+        const obj = findHitObject(event.clientX - rect.left, event.clientY - rect.top);
+        openEditContextMenu(event.clientX, event.clientY, obj);
+      });
+
+      window.addEventListener("pointerdown", (event) => {
+        if (!editContextMenu || editContextMenu.hidden) return;
+        if (event.target instanceof Node && editContextMenu.contains(event.target)) return;
+        closeEditContextMenu();
+      });
+
       gameCanvas.addEventListener("pointerdown", (event) => {
         if (!arrived()) return;
         const rect = gameCanvas.getBoundingClientRect();
@@ -2317,7 +2569,12 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
 
         const obj = findHitObject(pointerX, pointerY);
         if (obj) {
-          if (obj.motion.type === "fixed" && obj.motion.fixedMode === "anchored") return;
+          if (presentationSettings.editor.mode === "hemisphere") {
+            if (presentationSettings.editor.repositionObjectName !== obj.name) return;
+            if (obj.hemisphere !== presentationSettings.editor.hemisphere) return;
+          } else if (obj.motion.type === "fixed" && obj.motion.fixedMode === "anchored") {
+            return;
+          }
           grabbed = { stationIndex: arrivingAt, object: obj };
           dragLastX = pointerX;
           dragLastY = pointerY;
@@ -2341,10 +2598,27 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           const dy = y - dragLastY;
           const obj = grabbed.object;
           const sensitivity = 0.012;
-          obj.local.x += dx * sensitivity;
-          obj.local.y -= dy * sensitivity;
+          if (presentationSettings.editor.mode === "hemisphere") {
+            const pose = hemisphereEditorPose();
+            if (pose) {
+              const basis = screenBasis(pose.center, pose.position);
+              const sx = dx * sensitivity;
+              const sy = -dy * sensitivity;
+              obj.local.x += basis.right.x * sx + basis.up.x * sy;
+              obj.local.y += basis.right.y * sx + basis.up.y * sy;
+              obj.local.z += basis.right.z * sx + basis.up.z * sy;
+            }
+          } else {
+            obj.local.x += dx * sensitivity;
+            obj.local.y -= dy * sensitivity;
+          }
 
-          if (obj.motion.type === "fixed") {
+          if (presentationSettings.editor.mode === "hemisphere") {
+            obj.anchor = { ...obj.local };
+            obj.anchorMode = "absolute";
+            obj.anchorOffset = { x: 0, y: 0, z: 0 };
+            obj.velocity = { x: 0, y: 0, z: 0 };
+          } else if (obj.motion.type === "fixed") {
             obj.anchor = { ...obj.local };
             obj.anchorMode = "absolute";
             obj.anchorOffset = { x: 0, y: 0, z: 0 };
@@ -2364,7 +2638,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
           return;
         }
 
-        if (presentationSettings.camera.mode !== "locked") {
+        if (presentationSettings.editor.mode === "none" && presentationSettings.camera.mode !== "locked") {
           const nx = x / Math.max(1, rect.width) - .5;
           const ny = y / Math.max(1, rect.height) - .5;
 
@@ -2722,6 +2996,50 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
   .sphere-settings-close:hover,
   .sphere-settings-toggle:hover {
     background:rgba(255,255,255,.1);
+  }
+
+  .edit-context-menu {
+    position:fixed;
+    z-index:20;
+    width:250px;
+    padding:7px;
+    border:1px solid rgba(255,255,255,.16);
+    border-radius:12px;
+    background:rgba(15,18,23,.97);
+    box-shadow:0 18px 55px rgba(0,0,0,.48);
+    backdrop-filter:blur(14px);
+  }
+
+  .edit-context-heading {
+    padding:9px 9px 5px;
+    color:rgba(255,255,255,.46);
+    font-size:10px;
+    font-weight:700;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+  }
+
+  .edit-context-action {
+    display:block;
+    width:100%;
+    border:0;
+    border-radius:8px;
+    background:transparent;
+    color:rgba(255,255,255,.88);
+    padding:9px 10px;
+    text-align:left;
+    cursor:pointer;
+    font:inherit;
+    font-size:12px;
+  }
+
+  .edit-context-action:hover,
+  .edit-context-action.is-active {
+    background:rgba(255,255,255,.1);
+  }
+
+  .edit-context-action.is-active::before {
+    content:"✓ ";
   }
 
   .sr-only {
