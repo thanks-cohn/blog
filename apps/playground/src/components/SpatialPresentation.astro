@@ -1574,7 +1574,6 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         assetFocusAudioState[name] ??= { track: configuredAssetFocusTrack(name) };
         if (typeof patch?.track === "string") assetFocusAudioState[name].track = patch.track;
         saveAssetFocusAudioState();
-        renderSphereSettings();
       },
       getSpatialEnvelope(name: string) {
         if (!allSceneAssetNames().some((asset) => asset.name === name)) return null;
@@ -1829,33 +1828,6 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           }
         });
 
-        const focusSong = document.createElement("select");
-        focusSong.className = "sphere-motion-select";
-        focusSong.setAttribute("aria-label", `Focus song for ${asset.name}`);
-        focusSong.disabled = asset.kind !== "3d";
-
-        const inheritedOption = document.createElement("option");
-        inheritedOption.value = "";
-        inheritedOption.textContent = presentationSettings.focusAudio.track
-          ? `Station fallback · ${presentationSettings.focusAudio.track}`
-          : "No song assigned";
-        inheritedOption.selected = !asset.focusTrack;
-        focusSong.appendChild(inheritedOption);
-
-        for (const track of Array.isArray(config.musicTracks) ? config.musicTracks : []) {
-          const option = document.createElement("option");
-          option.value = String(track.name);
-          option.textContent = String(track.name);
-          option.selected = asset.focusTrack === track.name;
-          focusSong.appendChild(option);
-        }
-
-        focusSong.addEventListener("change", () => {
-          window.webrevPresentationSettings?.setAssetFocusAudio(asset.name, {
-            track: focusSong.value
-          });
-        });
-
         const remove = document.createElement("button");
         remove.type = "button";
         remove.className = "sphere-asset-remove";
@@ -1865,7 +1837,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           window.webrevPresentationSettings?.setAssetVisible(obj.name, false);
         });
 
-        row.append(name, side, motionSelect, focusSong, remove);
+        row.append(name, side, motionSelect, remove);
         return row;
       }
 
