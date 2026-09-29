@@ -2269,6 +2269,7 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         entry.group.position.set(center.x, center.y, center.z);
 
         if (presentationSettings.editor.mode === "hemisphere") {
+          // Hemisphere Editor invariant: image is the fixed world-space center plane.
           entry.group.quaternion.identity();
         } else {
           const basis = screenBasis(center, cameraPosition());
@@ -2750,8 +2751,24 @@ const runtimeConfig = { ...config, assetsByArtwork, resolvedLinks: links };
         if (threeRenderer && threeScene && threeCamera) {
           const cam = cameraPosition();
           threeCamera.position.set(cam.x, cam.y, cam.z);
-          threeCamera.rotation.order = "YXZ";
-          threeCamera.rotation.set(lookPitch, lookYaw, 0);
+
+          if (presentationSettings.editor.mode === "hemisphere") {
+            // Use the exact same camera basis as the editor's projection math.
+            // Three.js cameras look down local -Z, so the third basis vector is -forward.
+            const center = stationCenter(arrivingAt);
+            const basis = screenBasis(center, cam);
+            const T3: any = THREE;
+            const matrix = new T3.Matrix4().makeBasis(
+              new T3.Vector3(basis.right.x, basis.right.y, basis.right.z),
+              new T3.Vector3(basis.up.x, basis.up.y, basis.up.z),
+              new T3.Vector3(-basis.forward.x, -basis.forward.y, -basis.forward.z)
+            );
+            threeCamera.quaternion.setFromRotationMatrix(matrix);
+          } else {
+            threeCamera.rotation.order = "YXZ";
+            threeCamera.rotation.set(lookPitch, lookYaw, 0);
+          }
+
           threeRenderer.render(threeScene, threeCamera);
         }
 
