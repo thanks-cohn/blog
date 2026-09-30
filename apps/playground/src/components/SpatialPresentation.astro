@@ -6,6 +6,7 @@ export interface Props {
 }
 
 const { config, homeHref, links } = Astro.props;
+const showcaseMode = Boolean(config?.showcaseDemo?.enabled);
 
 type DiscoveredAsset = { name: string; url: string; kind: "2d" | "3d" };
 
@@ -41,9 +42,18 @@ const discoveredMusic = import.meta.glob("../assets/music/*.{mp3,wav,ogg,m4a,aac
   import: "default"
 }) as Record<string, string>;
 
-const musicTracks = Object.entries(discoveredMusic)
-  .map(([path, url]) => ({ name: path.split("/").pop() ?? path, url }))
-  .sort((a, b) => a.name.localeCompare(b.name));
+const localMusicTracks = Object.entries(discoveredMusic)
+  .map(([path, url]) => ({ name: path.split("/").pop() ?? path, url }));
+
+const remoteMusicTracks = (Array.isArray(config?.remoteMusicTracks) ? config.remoteMusicTracks : [])
+  .filter((track: any) => typeof track?.name === "string" && typeof track?.url === "string")
+  .map((track: any) => ({ name: String(track.name), url: String(track.url) }));
+
+const musicTracks = Array.from(
+  new Map(
+    [...localMusicTracks, ...remoteMusicTracks].map((track) => [track.name, track])
+  ).values()
+).sort((a, b) => a.name.localeCompare(b.name));
 
 const assetsByArtwork: Record<string, DiscoveredAsset[]> = {};
 
@@ -59,6 +69,20 @@ function registerAsset(path: string, url: string, kind: "2d" | "3d") {
 for (const [path, url] of Object.entries(discovered2d)) registerAsset(path, url, "2d");
 for (const [path, url] of Object.entries(discovered3d)) registerAsset(path, url, "3d");
 
+for (const asset of Array.isArray(config?.remoteAssets) ? config.remoteAssets : []) {
+  if (
+    typeof asset?.artworkName !== "string" ||
+    typeof asset?.name !== "string" ||
+    typeof asset?.url !== "string"
+  ) continue;
+  const kind: "2d" | "3d" = asset.kind === "2d" ? "2d" : "3d";
+  (assetsByArtwork[asset.artworkName] ??= []).push({
+    name: asset.name,
+    url: asset.url,
+    kind
+  });
+}
+
 const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, musicTracks, resolvedLinks: links };
 ---
 
@@ -67,6 +91,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
   data-webrev-id="presentation.do-it-your-way"
   data-config={JSON.stringify(runtimeConfig)}
   data-home-href={homeHref}
+  data-showcase={showcaseMode ? "true" : "false"}
 >
   <canvas id="prism-rail-canvas" aria-label="Do It Your Way spatial presentation"></canvas>
   <canvas id="glb-layer" aria-hidden="true"></canvas>
@@ -4272,6 +4297,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
 
       gameCanvas.addEventListener("contextmenu", (event) => {
         event.preventDefault();
+        if (config.showcaseDemo?.enabled) return;
         const rect = gameCanvas.getBoundingClientRect();
         const obj = findHitObject(event.clientX - rect.left, event.clientY - rect.top);
 
@@ -4296,6 +4322,16 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
 
         const obj = findHitObject(pointerX, pointerY);
         if (obj) {
+          if (config.showcaseDemo?.enabled) {
+            // Showcase is intentionally gesture-simple: one tap/click on any
+            // visible GLB starts the focus journey. Once started, the playlist
+            // owns the experience and advances forever until the page closes.
+            if (obj.kind === "3d" && !focusExperience) {
+              event.preventDefault();
+              requestFocusExperience(obj);
+            }
+            return;
+          }
           if (focusExperience?.object === obj) return;
           if (presentationSettings.editor.mode === "hemisphere") {
             if (presentationSettings.editor.repositionObjectName !== obj.name) return;
@@ -4400,6 +4436,11 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       gameCanvas.addEventListener("pointerup", releasePointer);
       gameCanvas.addEventListener("pointercancel", releasePointer);
 
+      if (config.showcaseDemo?.enabled) {
+        gameCanvas.style.touchAction = "none";
+        gameCanvas.style.cursor = "pointer";
+      }
+
       gameCanvas.addEventListener("pointerleave", () => {
         if (!grabbed && presentationSettings.camera.mode === "focus") {
           targetYaw = 0;
@@ -4465,6 +4506,12 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
     z-index:2;
     pointer-events:none;
     background:transparent;
+  }
+
+  .presentation[data-showcase="true"] .sphere-settings-toggle,
+  .presentation[data-showcase="true"] .sphere-settings-panel,
+  .presentation[data-showcase="true"] .edit-context-menu {
+    display: none !important;
   }
 
   .sphere-settings-toggle {
