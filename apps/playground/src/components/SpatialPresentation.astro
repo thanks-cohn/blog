@@ -2184,6 +2184,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       window.addEventListener("webrev:presentation-settings", () => {
         stationSettings[activeStationId] = presentationSettings;
         targetZ = stationZ(arrivingAt) + presentationSettings.camera.distanceFromCenter;
+        syncLiveFocusAudio();
         renderSphereSettings();
       });
       window.addEventListener("webrev:asset-placement", () => {
@@ -2194,6 +2195,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
       });
       window.addEventListener("webrev:asset-focus-audio", () => {
+        syncLiveFocusAudio();
         if (settingsPanel && !settingsPanel.hidden) renderFocusSongPairing();
       });
       window.addEventListener("webrev:asset-motion", () => {
@@ -3504,6 +3506,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
 
       let focusAudioElement: HTMLAudioElement | null = null;
       let focusAudioFadeFrame = 0;
+      let focusAudioSourceUrl = "";
 
       function selectedFocusTrackUrl(obj: SceneObject) {
         if (!presentationSettings.focusAudio.enabled) return "";
@@ -3517,6 +3520,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       function stopFocusAudio() {
         if (focusAudioFadeFrame) cancelAnimationFrame(focusAudioFadeFrame);
         focusAudioFadeFrame = 0;
+        focusAudioSourceUrl = "";
         if (!focusAudioElement) return;
         focusAudioElement.pause();
         focusAudioElement.currentTime = 0;
@@ -3533,11 +3537,37 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         audio.loop = false;
         audio.volume = 0;
         focusAudioElement = audio;
+        focusAudioSourceUrl = url;
 
         // Called directly from the visitor's menu click. Begin silently now so
         // browsers recognize the playback as user-initiated; the audible fade
         // begins only when the cinematic camera settles.
         void audio.play().catch(() => {});
+      }
+
+      function syncLiveFocusAudio() {
+        if (!focusExperience) return;
+
+        const desiredUrl = selectedFocusTrackUrl(focusExperience.object);
+        if (!desiredUrl) {
+          stopFocusAudio();
+          return;
+        }
+
+        if (focusAudioElement && focusAudioSourceUrl === desiredUrl) {
+          if (focusExperience.settled) {
+            if (focusAudioFadeFrame) cancelAnimationFrame(focusAudioFadeFrame);
+            focusAudioFadeFrame = 0;
+            focusAudioElement.volume = Math.max(
+              0,
+              Math.min(1, presentationSettings.focusAudio.volume)
+            );
+          }
+          return;
+        }
+
+        primeFocusAudio(focusExperience.object);
+        if (focusExperience.settled) fadeInFocusAudio();
       }
 
       function fadeInFocusAudio() {
