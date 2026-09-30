@@ -3687,6 +3687,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       }
 
       let focusAudioElement: HTMLAudioElement | null = null;
+      let focusAudioUnlocked = false;
       let focusAudioFadeFrame = 0;
       let focusAudioSourceUrl = "";
       let focusAudioCurrentAssetName = "";
@@ -3735,6 +3736,58 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         return typeof selected?.url === "string" ? selected.url : "";
       }
 
+      function ensureFocusAudioElement() {
+        if (focusAudioElement) return focusAudioElement;
+
+        const audio = document.createElement("audio");
+        audio.preload = "auto";
+        audio.playsInline = true;
+        audio.setAttribute("playsinline", "");
+        audio.style.display = "none";
+        document.body.appendChild(audio);
+
+        audio.addEventListener("ended", () => {
+          if (focusAudioElement !== audio) return;
+          if (presentationSettings.focusAudio.playbackMode === "loop-item") return;
+          advanceFocusPlaylist();
+        });
+
+        focusAudioElement = audio;
+        return audio;
+      }
+
+      function unlockFocusAudioFromGesture() {
+        const audio = ensureFocusAudioElement();
+        if (focusAudioUnlocked) return;
+
+        // iOS/WebKit ties audible HTMLMediaElement playback to a direct user
+        // gesture. Reuse this exact element for the whole journey so later
+        // song changes don't create a fresh, locked media element.
+        const previousSrc = audio.src;
+        const previousVolume = audio.volume;
+        audio.volume = Math.max(
+          0.01,
+          Math.min(1, presentationSettings.focusAudio.volume)
+        );
+
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.then === "function") {
+          void playPromise.then(() => {
+            focusAudioUnlocked = true;
+            if (!previousSrc) {
+              audio.pause();
+              audio.removeAttribute("src");
+              audio.load();
+            }
+            audio.volume = previousVolume;
+          }).catch(() => {
+            // The real source is assigned immediately after this call. A
+            // failed empty-source unlock is harmless; that play() still occurs
+            // synchronously inside the same pointer gesture.
+          });
+        }
+      }
+
       function stopFocusAudio() {
         if (focusAudioFadeFrame) cancelAnimationFrame(focusAudioFadeFrame);
         focusAudioFadeFrame = 0;
@@ -3742,8 +3795,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         focusAudioCurrentAssetName = "";
         if (!focusAudioElement) return;
         focusAudioElement.pause();
-        focusAudioElement.currentTime = 0;
-        focusAudioElement = null;
+        try { focusAudioElement.currentTime = 0; } catch {}
       }
 
       function playFocusAudioSource(
@@ -3752,24 +3804,33 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         initialVolume = 0,
         autoplay = true
       ) {
-        stopFocusAudio();
         if (!url) return;
 
-        const audio = new Audio(url);
-        audio.preload = "auto";
+        const audio = ensureFocusAudioElement();
+        if (focusAudioFadeFrame) cancelAnimationFrame(focusAudioFadeFrame);
+        focusAudioFadeFrame = 0;
+
+        if (audio.src !== url) {
+          audio.pause();
+          audio.src = url;
+          audio.load();
+        } else {
+          try { audio.currentTime = 0; } catch {}
+        }
+
         audio.loop = presentationSettings.focusAudio.playbackMode === "loop-item";
         audio.volume = Math.max(0, Math.min(1, initialVolume));
-        focusAudioElement = audio;
         focusAudioSourceUrl = url;
         focusAudioCurrentAssetName = assetName;
 
-        audio.addEventListener("ended", () => {
-          if (focusAudioElement !== audio) return;
-          if (presentationSettings.focusAudio.playbackMode === "loop-item") return;
-          advanceFocusPlaylist();
-        });
-
-        if (autoplay) void audio.play().catch(() => {});
+        if (autoplay) {
+          const playback = audio.play();
+          if (playback && typeof playback.then === "function") {
+            void playback.then(() => {
+              focusAudioUnlocked = true;
+            }).catch(() => {});
+          }
+        }
       }
 
       function primeFocusAudio(obj: SceneObject) {
@@ -4324,10 +4385,11 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         if (obj) {
           if (config.showcaseDemo?.enabled) {
             // Showcase is intentionally gesture-simple: one tap/click on any
-            // visible GLB starts the focus journey. Once started, the playlist
-            // owns the experience and advances forever until the page closes.
+            // visible GLB starts the focus journey. Unlock the one persistent
+            // media element in this exact pointer gesture for iPhone/iPad.
             if (obj.kind === "3d" && !focusExperience) {
               event.preventDefault();
+              unlockFocusAudioFromGesture();
               requestFocusExperience(obj);
             }
             return;
