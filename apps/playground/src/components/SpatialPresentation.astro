@@ -3692,6 +3692,23 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       let focusAudioSourceUrl = "";
       let focusAudioCurrentAssetName = "";
 
+      function fallbackShowcaseTrackName(obj: SceneObject) {
+        if (!config.showcaseDemo?.enabled) return "";
+        const tracks = Array.isArray(config.musicTracks) ? config.musicTracks : [];
+        if (!tracks.length) return "";
+
+        const stationIndex = layouts.findIndex((layout) => layout.includes(obj));
+        if (stationIndex < 0) return "";
+        const glbs = (layouts[stationIndex] ?? []).filter(
+          (candidate: SceneObject) => candidate.kind === "3d" && candidate.visible !== false
+        );
+        const index = glbs.indexOf(obj);
+        if (index < 0) return "";
+
+        const fallback = tracks[index % tracks.length];
+        return typeof fallback?.name === "string" ? fallback.name : "";
+      }
+
       function resolvedFocusPlaylist(): FocusPlaylistEntry[] {
         const tracks = Array.isArray(config.musicTracks) ? config.musicTracks : [];
         const trackUrl = new Map<string, string>(
@@ -3711,7 +3728,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           for (const obj of layouts[stationIndex] ?? []) {
             if (obj.kind !== "3d" || obj.visible === false) continue;
             const assigned =
-              assetFocusAudioState[obj.name]?.track ?? configuredAssetFocusTrack(obj.name);
+              assetFocusAudioState[obj.name]?.track ||
+              configuredAssetFocusTrack(obj.name) ||
+              fallbackShowcaseTrackName(obj);
             if (!assigned) continue;
             const url = trackUrl.get(assigned);
             if (!url) continue;
@@ -3729,7 +3748,10 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
 
       function selectedFocusTrackUrl(obj: SceneObject) {
         if (!presentationSettings.focusAudio.enabled) return "";
-        const assigned = assetFocusAudioState[obj.name]?.track ?? configuredAssetFocusTrack(obj.name);
+        const assigned =
+          assetFocusAudioState[obj.name]?.track ||
+          configuredAssetFocusTrack(obj.name) ||
+          fallbackShowcaseTrackName(obj);
         const requested = assigned || presentationSettings.focusAudio.track;
         const tracks = Array.isArray(config.musicTracks) ? config.musicTracks : [];
         const selected = tracks.find((track: any) => track?.name === requested);
