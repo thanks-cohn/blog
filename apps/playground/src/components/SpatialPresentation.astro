@@ -3601,7 +3601,14 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         if (!audio) return;
 
         const startVolume = Math.max(0, Math.min(1, audio.volume));
-        const duration = Math.max(0, presentationSettings.focusAudio.fadeOutMs);
+        // Leaving the world should always feel like an exit, never an abrupt cut.
+        // Keep the configured fade when it is meaningful, but protect against
+        // stale/zero persisted values by falling back to the original 1.8s fade.
+        const configuredDuration = Number(presentationSettings.focusAudio.fadeOutMs);
+        const duration =
+          Number.isFinite(configuredDuration) && configuredDuration > 0
+            ? configuredDuration
+            : 1800;
         const startedAt = performance.now();
 
         const finish = () => {
@@ -3613,7 +3620,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           focusAudioFadeFrame = 0;
         };
 
-        if (duration === 0 || startVolume === 0) {
+        if (startVolume === 0) {
           finish();
           return;
         }
