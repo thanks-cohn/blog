@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "title": "Design it Your Way",
+  "title": "First Light Showcase",
   "rail": {
     "shape": "hexagonal-prism",
     "activeFace": "top",
@@ -100,7 +100,9 @@
       "track": "",
       "volume": 0.78,
       "fadeInMs": 1100,
-      "fadeOutMs": 1800
+      "fadeOutMs": 1800,
+      "playbackMode": "zone-cycle",
+      "scope": "station"
     }
   },
   "stations": [
@@ -110,12 +112,12 @@
       "label": "First Light",
       "theme": "amber",
       "text": {
-        "title": "Make the space yours.",
-        "body": "Replace the portrait, surround it with your own objects, and let the ride carry people into the arrangement."
+        "title": "There was never a me or you. There was only ever us",
+        "body": ""
       },
       "reveal": {
         "mode": "timer",
-        "delayMs": 1700
+        "delayMs": 0
       },
       "assetDisplayMode": "assets-only",
       "asset3d": {
@@ -123,44 +125,6 @@
         "hideBehindImage": false
       },
       "centerImage": "first-light-center.jpg"
-    },
-    {
-      "id": "blue-room",
-      "artworkName": "blue-room",
-      "label": "Blue Room",
-      "theme": "blue",
-      "text": {
-        "title": "The route is part of the design.",
-        "body": "The camera rides the visible thread. Later, any face of the six-sided prism can become the route."
-      },
-      "reveal": {
-        "mode": "click",
-        "delayMs": 0
-      },
-      "assetDisplayMode": "assets-and-proxies",
-      "asset3d": {
-        "layer": "middle",
-        "hideBehindImage": true
-      }
-    },
-    {
-      "id": "rose-archive",
-      "artworkName": "rose-archive",
-      "label": "Rose Archive",
-      "theme": "rose",
-      "text": {
-        "title": "Start with a format. End somewhere personal.",
-        "body": "Change the picture, the paper, the route, the speed, the surrounding objects, or the entire arrangement."
-      },
-      "reveal": {
-        "mode": "timer",
-        "delayMs": 2200
-      },
-      "assetDisplayMode": "assets-and-proxies",
-      "asset3d": {
-        "layer": "middle",
-        "hideBehindImage": true
-      }
     }
   ],
   "assetActions": {},
@@ -189,5 +153,13 @@
     "first-light-3.glb": {
       "type": "free"
     }
+  },
+  "showcaseDemo": {
+    "enabled": true,
+    "hideHud": true,
+    "hideRail": true,
+    "shootingStars": true,
+    "autoAdvanceFocus": true,
+    "loopFocusPlaylist": true
   }
 }
