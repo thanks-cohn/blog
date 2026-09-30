@@ -1424,6 +1424,42 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       ];
     }
 
+    function resolvedFocusPlaylistForApi(): FocusPlaylistEntry[] {
+      const tracks = Array.isArray(config.musicTracks) ? config.musicTracks : [];
+      const trackUrl = new Map<string, string>(
+        tracks
+          .filter((track: any) => typeof track?.name === "string" && typeof track?.url === "string")
+          .map((track: any) => [String(track.name), String(track.url)])
+      );
+      const assets = allSceneAssetNames();
+      const stationIndexes =
+        presentationSettings.focusAudio.scope === "all"
+          ? stationDefinitions.map((_: any, index: number) => index)
+          : [Math.max(0, stationDefinitions.findIndex((station: any) => station.id === activeStationId))];
+
+      const playlist: FocusPlaylistEntry[] = [];
+      for (const stationIndex of stationIndexes) {
+        const station = stationDefinitions[stationIndex];
+        if (!station) continue;
+        for (const asset of assets.filter((candidate) => candidate.stationId === station.id)) {
+          if (asset.kind !== "3d") continue;
+          const assigned =
+            assetFocusAudioState[asset.name]?.track ?? configuredAssetFocusTrack(asset.name);
+          if (!assigned) continue;
+          const url = trackUrl.get(assigned);
+          if (!url) continue;
+          playlist.push({
+            stationId: station.id,
+            stationIndex,
+            assetName: asset.name,
+            track: assigned,
+            url
+          });
+        }
+      }
+      return playlist;
+    }
+
     window.webrevPresentationSettings = {
       get(key?: PresentationSettingKey) {
         if (key === "camera.mode") return presentationSettings.camera.mode;
@@ -1439,6 +1475,8 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         if (key === "interaction.contextMenuMode") return presentationSettings.interaction.contextMenuMode;
         if (key === "focusAudio.enabled") return presentationSettings.focusAudio.enabled;
         if (key === "focusAudio.track") return presentationSettings.focusAudio.track;
+        if (key === "focusAudio.playbackMode") return presentationSettings.focusAudio.playbackMode;
+        if (key === "focusAudio.scope") return presentationSettings.focusAudio.scope;
         if (key === "focusAudio.volume") return presentationSettings.focusAudio.volume;
         if (key === "focusAudio.fadeInMs") return presentationSettings.focusAudio.fadeInMs;
         if (key === "focusAudio.fadeOutMs") return presentationSettings.focusAudio.fadeOutMs;
@@ -1665,7 +1703,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         saveAssetFocusAudioState();
       },
       getFocusPlaylist() {
-        return resolvedFocusPlaylist().map((entry) => ({ ...entry }));
+        return resolvedFocusPlaylistForApi().map((entry) => ({ ...entry }));
       },
       setFocusPlaybackMode(mode: FocusPlaybackMode) {
         presentationSettings.focusAudio.playbackMode =
