@@ -44,6 +44,26 @@ describe("focusJourney", () => {
     expect(picked).toBe("two.mp3");
   });
 
+  it("supports authored intermission sequences without changing the journey model", () => {
+    const config = normalizeFocusJourneyConfig({
+      intermission: {
+        enabled: true,
+        tracks: ["fallback.mp3"],
+        strategy: "sequence",
+        sequence: ["intro.mp3", "bridge.mp3", "outro.mp3"],
+        avoidImmediateRepeat: false,
+        between: "items",
+        playToEnd: true
+      }
+    });
+    const selected = chooseIntermissionTrack(
+      config,
+      { phase: "focus", index: 0, direction: "forward", intermissionCursor: 1 },
+      0.9
+    );
+    expect(selected).toBe("bridge.mp3");
+  });
+
   it("inserts a play-to-end intermission before crossing to another station", () => {
     const config = normalizeFocusJourneyConfig({
       scope: "all",
