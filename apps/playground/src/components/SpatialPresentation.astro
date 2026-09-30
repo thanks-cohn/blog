@@ -3746,11 +3746,17 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         if (!focusExperience) return;
 
         const selectedUrl = selectedFocusTrackUrl(focusExperience.object);
+        if (!presentationSettings.focusAudio.enabled) {
+          stopFocusAudio();
+          return;
+        }
         const desiredUrl =
-          presentationSettings.focusAudio.playbackMode === "zone-cycle" &&
-          focusAudioElement &&
-          focusAudioSourceUrl
-            ? focusAudioSourceUrl
+          focusAudioElement && focusAudioSourceUrl
+            ? (
+                focusAudioCurrentAssetName === focusExperience.object.name
+                  ? (selectedUrl || focusAudioSourceUrl)
+                  : focusAudioSourceUrl
+              )
             : selectedUrl;
         if (!desiredUrl) {
           stopFocusAudio();
