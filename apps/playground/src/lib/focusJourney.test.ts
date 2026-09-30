@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  chooseIntermissionTrack,
   journeyTargets,
   nextJourneyStep,
   normalizeFocusJourneyConfig,
   previousJourneyStep,
+  restartJourneyStep,
   type JourneyTarget
 } from "./focusJourney";
 
@@ -15,50 +17,89 @@ const targets: JourneyTarget[] = [
 
 describe("focusJourney", () => {
   it("filters to the current station or keeps the whole world", () => {
-    const station = normalizeFocusJourneyConfig({ scope: "station" });
-    expect(journeyTargets(targets, station, "a")).toHaveLength(2);
-
-    const all = normalizeFocusJourneyConfig({ scope: "all" });
-    expect(journeyTargets(targets, all, "a")).toHaveLength(3);
+    expect(
+      journeyTargets(targets, normalizeFocusJourneyConfig({ scope: "station" }), "a")
+    ).toHaveLength(2);
+    expect(
+      journeyTargets(targets, normalizeFocusJourneyConfig({ scope: "all" }), "a")
+    ).toHaveLength(3);
   });
 
-  it("inserts an intermission when crossing station boundaries", () => {
+  it("randomizes intermissions while avoiding an immediate repeat by default", () => {
+    const config = normalizeFocusJourneyConfig({
+      intermission: {
+        enabled: true,
+        tracks: ["one.mp3", "two.mp3", "three.mp3"],
+        strategy: "random",
+        avoidImmediateRepeat: true,
+        between: "stations",
+        playToEnd: true
+      }
+    });
+    const picked = chooseIntermissionTrack(
+      config,
+      { phase: "focus", index: 0, direction: "forward", lastIntermissionTrack: "one.mp3" },
+      0
+    );
+    expect(picked).toBe("two.mp3");
+  });
+
+  it("inserts a play-to-end intermission before crossing to another station", () => {
     const config = normalizeFocusJourneyConfig({
       scope: "all",
-      boundary: "wrap",
-      intermission: { enabled: true, track: "intermission.mp3", between: "stations", playToEnd: true }
+      intermission: {
+        enabled: true,
+        tracks: ["intermission.mp3"],
+        strategy: "random",
+        avoidImmediateRepeat: true,
+        between: "stations",
+        playToEnd: true
+      }
     });
     const step = nextJourneyStep(
       targets,
       { phase: "focus", index: 1, direction: "forward" },
-      config
+      config,
+      0
     );
     expect(step.type).toBe("intermission");
     if (step.type === "intermission") {
       expect(step.track).toBe("intermission.mp3");
+      expect(step.playToEnd).toBe(true);
       expect(step.then.target.assetName).toBe("b-1.glb");
     }
   });
 
   it("wraps forever when configured to wrap", () => {
-    const config = normalizeFocusJourneyConfig({ scope: "all", boundary: "wrap" });
     const step = nextJourneyStep(
       targets,
       { phase: "focus", index: 2, direction: "forward" },
-      config
+      normalizeFocusJourneyConfig({ scope: "all", boundary: "wrap" })
     );
     expect(step.type).toBe("focus");
     if (step.type === "focus") expect(step.target.assetName).toBe("a-1.glb");
   });
 
   it("supports semantic previous without faking an arrow key", () => {
-    const config = normalizeFocusJourneyConfig({ scope: "all", boundary: "wrap" });
     const step = previousJourneyStep(
       targets,
       { phase: "focus", index: 1, direction: "forward" },
-      config
+      normalizeFocusJourneyConfig({ scope: "all", boundary: "wrap" })
     );
     expect(step.type).toBe("focus");
     if (step.type === "focus") expect(step.target.assetName).toBe("a-1.glb");
+  });
+
+  it("can explicitly restart at the first target", () => {
+    const step = restartJourneyStep(
+      targets,
+      { phase: "focus", index: 2, direction: "forward" },
+      normalizeFocusJourneyConfig({ scope: "all", boundary: "wrap" })
+    );
+    expect(step.type).toBe("focus");
+    if (step.type === "focus") {
+      expect(step.index).toBe(0);
+      expect(step.target.assetName).toBe("a-1.glb");
+    }
   });
 });
