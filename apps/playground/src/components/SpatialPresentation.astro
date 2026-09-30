@@ -4776,7 +4776,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
     color:rgba(255,255,255,.72);
     cursor:pointer;
     touch-action:manipulation;
-    display:flex;
+    display:none;
     align-items:center;
     opacity:.58;
     transition:opacity 160ms ease, background 160ms ease;
@@ -4834,8 +4834,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
     letter-spacing:normal;
   }
 
-  @media (max-width:640px) {
+  @media (max-width:640px) and (pointer:coarse) {
     .focus-song-overlay {
+      display:flex;
       top:22%;
       bottom:22%;
       width:64px;
