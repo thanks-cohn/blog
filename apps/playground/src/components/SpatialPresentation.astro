@@ -3697,7 +3697,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         const tracks = Array.isArray(config.musicTracks) ? config.musicTracks : [];
         if (!tracks.length) return "";
 
-        const stationIndex = layouts.findIndex((layout) => layout.includes(obj));
+        const stationIndex = layouts.findIndex((layout: SceneObject[]) => layout.includes(obj));
         if (stationIndex < 0) return "";
         const glbs = (layouts[stationIndex] ?? []).filter(
           (candidate: SceneObject) => candidate.kind === "3d" && candidate.visible !== false
