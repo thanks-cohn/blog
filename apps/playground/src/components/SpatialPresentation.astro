@@ -204,6 +204,15 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
   };
 
   type CameraMode = "locked" | "focus" | "free";
+  type FocusPlaybackMode = "zone-cycle" | "loop-item";
+  type FocusPlaybackScope = "station" | "all";
+  type FocusPlaylistEntry = {
+    stationId: string;
+    stationIndex: number;
+    assetName: string;
+    track: string;
+    url: string;
+  };
   type PresentationSettingKey =
     | "camera.mode"
     | "camera.placement"
@@ -218,6 +227,8 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
     | "interaction.contextMenuMode"
     | "focusAudio.enabled"
     | "focusAudio.track"
+    | "focusAudio.playbackMode"
+    | "focusAudio.scope"
     | "focusAudio.volume"
     | "focusAudio.fadeInMs"
     | "focusAudio.fadeOutMs"
@@ -266,6 +277,8 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
     focusAudio: {
       enabled: boolean;
       track: string;
+      playbackMode: FocusPlaybackMode;
+      scope: FocusPlaybackScope;
       volume: number;
       fadeInMs: number;
       fadeOutMs: number;
@@ -322,6 +335,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         setAssetMotion(name: string, motion: ObjectMotion): void;
         getAssetFocusAudio(name: string): { track: string } | null;
         setAssetFocusAudio(name: string, patch: { track?: string }): void;
+        getFocusPlaylist(): FocusPlaylistEntry[];
+        setFocusPlaybackMode(mode: FocusPlaybackMode): PresentationSettingsSnapshot;
+        setFocusPlaybackScope(scope: FocusPlaybackScope): PresentationSettingsSnapshot;
         getSpatialEnvelope(name: string): SpatialEnvelopeConfig | null;
         setSpatialEnvelope(name: string, patch: Partial<SpatialEnvelopeConfig>): void;
         setEnvelopeDebug(name: string, visible: boolean): void;
@@ -842,6 +858,16 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
             config.arrangement?.focusAudio?.track ??
             ""
           ),
+          playbackMode:
+            station?.focusAudio?.playbackMode === "loop-item" ||
+            config.arrangement?.focusAudio?.playbackMode === "loop-item"
+              ? "loop-item"
+              : "zone-cycle",
+          scope:
+            station?.focusAudio?.scope === "all" ||
+            config.arrangement?.focusAudio?.scope === "all"
+              ? "all"
+              : "station",
           volume: Math.max(
             0,
             Math.min(
@@ -911,6 +937,8 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         focusAudio: {
           enabled: Boolean(source.focusAudio.enabled),
           track: String(source.focusAudio.track ?? ""),
+          playbackMode: source.focusAudio.playbackMode === "loop-item" ? "loop-item" : "zone-cycle",
+          scope: source.focusAudio.scope === "all" ? "all" : "station",
           volume: Math.max(0, Math.min(1, Number(source.focusAudio.volume))),
           fadeInMs: Math.max(0, Number(source.focusAudio.fadeInMs)),
           fadeOutMs: Math.max(0, Number(source.focusAudio.fadeOutMs))
@@ -1014,6 +1042,14 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
             typeof raw?.focusAudio?.track === "string"
               ? raw.focusAudio.track
               : defaults.focusAudio.track,
+          playbackMode:
+            raw?.focusAudio?.playbackMode === "loop-item"
+              ? "loop-item"
+              : defaults.focusAudio.playbackMode,
+          scope:
+            raw?.focusAudio?.scope === "all"
+              ? "all"
+              : defaults.focusAudio.scope,
           volume: Number.isFinite(Number(raw?.focusAudio?.volume))
             ? Math.max(0, Math.min(1, Number(raw.focusAudio.volume)))
             : defaults.focusAudio.volume,
@@ -1236,6 +1272,28 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           options: musicOptions
         },
         {
+          key: "focusAudio.playbackMode",
+          label: "When a song ends",
+          group: "focusAudio",
+          control: "select",
+          description: "Play all songs walks item-to-item and restarts at the end. Loop this song repeats the current item's song.",
+          options: [
+            { value: "zone-cycle", label: "Play all songs" },
+            { value: "loop-item", label: "Loop this song" }
+          ]
+        },
+        {
+          key: "focusAudio.scope",
+          label: "Playlist scope",
+          group: "focusAudio",
+          control: "select",
+          description: "Default stays inside this picture / zone. All planes lets the playlist continue through every configured plane.",
+          options: [
+            { value: "station", label: "This picture / zone" },
+            { value: "all", label: "All pictures / planes" }
+          ]
+        },
+        {
           key: "focusAudio.volume",
           label: "Song volume",
           group: "focusAudio",
@@ -1439,6 +1497,11 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           presentationSettings.focusAudio.enabled = Boolean(value);
         } else if (key === "focusAudio.track") {
           presentationSettings.focusAudio.track = String(value ?? "");
+        } else if (key === "focusAudio.playbackMode") {
+          presentationSettings.focusAudio.playbackMode =
+            value === "loop-item" ? "loop-item" : "zone-cycle";
+        } else if (key === "focusAudio.scope") {
+          presentationSettings.focusAudio.scope = value === "all" ? "all" : "station";
         } else if (key === "focusAudio.volume") {
           presentationSettings.focusAudio.volume = Math.max(0, Math.min(1, Number(value) || 0));
         } else if (key === "focusAudio.fadeInMs") {
@@ -1508,6 +1571,8 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         if (key === "viewport.paddingPx") presentationSettings.viewport.paddingPx = defaults.viewport.paddingPx;
         if (key === "focusAudio.enabled") presentationSettings.focusAudio.enabled = defaults.focusAudio.enabled;
         if (key === "focusAudio.track") presentationSettings.focusAudio.track = defaults.focusAudio.track;
+        if (key === "focusAudio.playbackMode") presentationSettings.focusAudio.playbackMode = defaults.focusAudio.playbackMode;
+        if (key === "focusAudio.scope") presentationSettings.focusAudio.scope = defaults.focusAudio.scope;
         if (key === "focusAudio.volume") presentationSettings.focusAudio.volume = defaults.focusAudio.volume;
         if (key === "focusAudio.fadeInMs") presentationSettings.focusAudio.fadeInMs = defaults.focusAudio.fadeInMs;
         if (key === "focusAudio.fadeOutMs") presentationSettings.focusAudio.fadeOutMs = defaults.focusAudio.fadeOutMs;
@@ -1598,6 +1663,18 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         assetFocusAudioState[name] ??= { track: configuredAssetFocusTrack(name) };
         if (typeof patch?.track === "string") assetFocusAudioState[name].track = patch.track;
         saveAssetFocusAudioState();
+      },
+      getFocusPlaylist() {
+        return resolvedFocusPlaylist().map((entry) => ({ ...entry }));
+      },
+      setFocusPlaybackMode(mode: FocusPlaybackMode) {
+        presentationSettings.focusAudio.playbackMode =
+          mode === "loop-item" ? "loop-item" : "zone-cycle";
+        return publishSettings();
+      },
+      setFocusPlaybackScope(scope: FocusPlaybackScope) {
+        presentationSettings.focusAudio.scope = scope === "all" ? "all" : "station";
+        return publishSettings();
       },
       getSpatialEnvelope(name: string) {
         if (!allSceneAssetNames().some((asset) => asset.name === name)) return null;
@@ -3507,6 +3584,42 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       let focusAudioElement: HTMLAudioElement | null = null;
       let focusAudioFadeFrame = 0;
       let focusAudioSourceUrl = "";
+      let focusAudioCurrentAssetName = "";
+
+      function resolvedFocusPlaylist(): FocusPlaylistEntry[] {
+        const tracks = Array.isArray(config.musicTracks) ? config.musicTracks : [];
+        const trackUrl = new Map<string, string>(
+          tracks
+            .filter((track: any) => typeof track?.name === "string" && typeof track?.url === "string")
+            .map((track: any) => [String(track.name), String(track.url)])
+        );
+        const stationIndexes =
+          presentationSettings.focusAudio.scope === "all"
+            ? stations.map((_: any, index: number) => index)
+            : [arrivingAt];
+
+        const playlist: FocusPlaylistEntry[] = [];
+        for (const stationIndex of stationIndexes) {
+          const station = stations[stationIndex];
+          if (!station) continue;
+          for (const obj of layouts[stationIndex] ?? []) {
+            if (obj.kind !== "3d" || obj.visible === false) continue;
+            const assigned =
+              assetFocusAudioState[obj.name]?.track ?? configuredAssetFocusTrack(obj.name);
+            if (!assigned) continue;
+            const url = trackUrl.get(assigned);
+            if (!url) continue;
+            playlist.push({
+              stationId: station.id,
+              stationIndex,
+              assetName: obj.name,
+              track: assigned,
+              url
+            });
+          }
+        }
+        return playlist;
+      }
 
       function selectedFocusTrackUrl(obj: SceneObject) {
         if (!presentationSettings.focusAudio.enabled) return "";
@@ -3521,40 +3634,94 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         if (focusAudioFadeFrame) cancelAnimationFrame(focusAudioFadeFrame);
         focusAudioFadeFrame = 0;
         focusAudioSourceUrl = "";
+        focusAudioCurrentAssetName = "";
         if (!focusAudioElement) return;
         focusAudioElement.pause();
         focusAudioElement.currentTime = 0;
         focusAudioElement = null;
       }
 
-      function primeFocusAudio(obj: SceneObject) {
+      function playFocusAudioSource(
+        url: string,
+        assetName: string,
+        initialVolume = 0
+      ) {
         stopFocusAudio();
-        const url = selectedFocusTrackUrl(obj);
         if (!url) return;
 
         const audio = new Audio(url);
         audio.preload = "auto";
-        audio.loop = false;
-        audio.volume = 0;
+        audio.loop = presentationSettings.focusAudio.playbackMode === "loop-item";
+        audio.volume = Math.max(0, Math.min(1, initialVolume));
         focusAudioElement = audio;
         focusAudioSourceUrl = url;
+        focusAudioCurrentAssetName = assetName;
 
-        // Called directly from the visitor's menu click. Begin silently now so
-        // browsers recognize the playback as user-initiated; the audible fade
-        // begins only when the cinematic camera settles.
+        audio.addEventListener("ended", () => {
+          if (focusAudioElement !== audio) return;
+          if (presentationSettings.focusAudio.playbackMode === "loop-item") return;
+          advanceFocusPlaylist();
+        });
+
         void audio.play().catch(() => {});
+      }
+
+      function primeFocusAudio(obj: SceneObject) {
+        const url = selectedFocusTrackUrl(obj);
+        playFocusAudioSource(url, obj.name, 0);
+      }
+
+      function advanceFocusPlaylist() {
+        if (!focusExperience || presentationSettings.focusAudio.playbackMode === "loop-item") return;
+        const playlist = resolvedFocusPlaylist();
+        if (!playlist.length) return;
+
+        let index = playlist.findIndex(
+          (entry) =>
+            entry.assetName === focusAudioCurrentAssetName &&
+            entry.url === focusAudioSourceUrl
+        );
+        if (index < 0) {
+          index = playlist.findIndex((entry) => entry.assetName === focusExperience?.object.name);
+        }
+        const next = playlist[(index + 1 + playlist.length) % playlist.length];
+        if (!next) return;
+
+        playFocusAudioSource(
+          next.url,
+          next.assetName,
+          Math.max(0, Math.min(1, presentationSettings.focusAudio.volume))
+        );
+        window.dispatchEvent(new CustomEvent("webrev:focus-playlist-track", {
+          detail: {
+            mode: presentationSettings.focusAudio.playbackMode,
+            scope: presentationSettings.focusAudio.scope,
+            stationId: next.stationId,
+            stationIndex: next.stationIndex,
+            assetName: next.assetName,
+            track: next.track
+          }
+        }));
       }
 
       function syncLiveFocusAudio() {
         if (!focusExperience) return;
 
-        const desiredUrl = selectedFocusTrackUrl(focusExperience.object);
+        const selectedUrl = selectedFocusTrackUrl(focusExperience.object);
+        const desiredUrl =
+          presentationSettings.focusAudio.playbackMode === "zone-cycle" &&
+          focusAudioElement &&
+          focusAudioSourceUrl
+            ? focusAudioSourceUrl
+            : selectedUrl;
         if (!desiredUrl) {
           stopFocusAudio();
           return;
         }
 
         if (focusAudioElement && focusAudioSourceUrl === desiredUrl) {
+          focusAudioElement.loop =
+            presentationSettings.focusAudio.playbackMode === "loop-item";
           if (focusExperience.settled) {
             if (focusAudioFadeFrame) cancelAnimationFrame(focusAudioFadeFrame);
             focusAudioFadeFrame = 0;
@@ -3617,6 +3784,8 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           audio.pause();
           audio.currentTime = 0;
           focusAudioElement = null;
+          focusAudioSourceUrl = "";
+          focusAudioCurrentAssetName = "";
           focusAudioFadeFrame = 0;
         };
 
@@ -3743,7 +3912,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
               : " · move mouse for free look";
         const hint = focusExperience && focusExperience.stationIndex === arrivingAt
           ? focusExperience.settled
-            ? `COME INTO OUR WORLD · ${focusExperience.object.name} · right-click to Leave for now <3`
+            ? `COME INTO OUR WORLD · ${focusExperience.object.name} · ${presentationSettings.focusAudio.playbackMode === "loop-item" ? "LOOP THIS SONG" : "PLAY ALL SONGS"} · right-click for music / leave`
             : `COMING CLOSER · ${focusExperience.object.name}`
           : arrived()
           ? presentationSettings.editor.mode === "hemisphere"
@@ -3879,6 +4048,17 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         editContextMenu.replaceChildren();
 
         if (focusExperience && focusExperience.stationIndex === arrivingAt) {
+          const api = window.webrevPresentationSettings;
+          addEditContextAction(
+            "Play all songs",
+            () => api?.setFocusPlaybackMode("zone-cycle"),
+            presentationSettings.focusAudio.playbackMode === "zone-cycle"
+          );
+          addEditContextAction(
+            "Loop this song",
+            () => api?.setFocusPlaybackMode("loop-item"),
+            presentationSettings.focusAudio.playbackMode === "loop-item"
+          );
           addEditContextAction("Leave for now <3", () => endFocusExperience());
         } else if (!obj || obj.kind !== "3d") {
           const heading = document.createElement("div");
