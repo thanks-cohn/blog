@@ -2,7 +2,7 @@ export type JourneyDirection = "forward" | "backward";
 export type JourneyBoundary = "wrap" | "stop" | "reverse";
 export type JourneyScope = "station" | "all" | "explicit";
 export type JourneyPhase = "idle" | "focus" | "intermission" | "travel";
-export type IntermissionStrategy = "random" | "round-robin";
+export type IntermissionStrategy = "random" | "round-robin" | "sequence";
 
 export type JourneyTarget = {
   stationId: string;
@@ -21,6 +21,7 @@ export type FocusJourneyConfig = {
     enabled: boolean;
     tracks: string[];
     strategy: IntermissionStrategy;
+    sequence: string[];
     avoidImmediateRepeat: boolean;
     between: "stations" | "items";
     playToEnd: boolean;
@@ -70,7 +71,13 @@ export function normalizeFocusJourneyConfig(raw: Partial<FocusJourneyConfig> | n
       tracks: Array.isArray(rawIntermission.tracks)
         ? rawIntermission.tracks.map((track: unknown) => String(track)).filter(Boolean)
         : legacyTrack,
-      strategy: rawIntermission.strategy === "round-robin" ? "round-robin" : "random",
+      strategy:
+        rawIntermission.strategy === "round-robin" || rawIntermission.strategy === "sequence"
+          ? rawIntermission.strategy
+          : "random",
+      sequence: Array.isArray(rawIntermission.sequence)
+        ? rawIntermission.sequence.map((track: unknown) => String(track)).filter(Boolean)
+        : [],
       avoidImmediateRepeat: rawIntermission.avoidImmediateRepeat !== false,
       between: rawIntermission.between === "items" ? "items" : "stations",
       playToEnd: rawIntermission.playToEnd !== false
@@ -133,7 +140,12 @@ export function chooseIntermissionTrack(
   state: JourneyState,
   randomValue = Math.random()
 ): string {
-  const tracks = config.intermission.tracks.filter(Boolean);
+  const pool = config.intermission.tracks.filter(Boolean);
+  const sequence = config.intermission.sequence.filter(Boolean);
+  const tracks =
+    config.intermission.strategy === "sequence" && sequence.length
+      ? sequence
+      : pool;
   if (!config.intermission.enabled || tracks.length === 0) return "";
 
   let candidates = tracks;
@@ -145,7 +157,10 @@ export function chooseIntermissionTrack(
     candidates = tracks.filter((track) => track !== state.lastIntermissionTrack);
   }
 
-  if (config.intermission.strategy === "round-robin") {
+  if (
+    config.intermission.strategy === "round-robin" ||
+    config.intermission.strategy === "sequence"
+  ) {
     const cursor = Math.max(0, Number(state.intermissionCursor) || 0);
     return candidates[cursor % candidates.length] ?? "";
   }
