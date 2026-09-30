@@ -2911,6 +2911,47 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       }
 
       function drawBackground() {
+        if (config.showcaseDemo?.enabled) {
+          ctx.fillStyle = "#010207";
+          ctx.fillRect(0, 0, width, height);
+
+          const now = performance.now();
+          for (let i = 0; i < 96; i++) {
+            const x = (i * 193.1 + (i % 7) * 31.7) % Math.max(1, width);
+            const y = (i * 91.7 + (i % 11) * 17.3) % Math.max(1, height);
+            const twinkle = 0.38 + 0.42 * (0.5 + 0.5 * Math.sin(now * 0.0013 + i * 1.77));
+            const size = i % 13 === 0 ? 1.8 : i % 5 === 0 ? 1.25 : 0.8;
+            ctx.fillStyle = `rgba(255,255,255,${twinkle.toFixed(3)})`;
+            ctx.fillRect(x, y, size, size);
+          }
+
+          if (config.showcaseDemo?.shootingStars) {
+            const period = 6400;
+            for (let i = 0; i < 3; i++) {
+              const phase = ((now + i * 2170) % period) / period;
+              const active = phase < 0.18;
+              if (!active) continue;
+              const t = phase / 0.18;
+              const startX = width * (0.12 + i * 0.28);
+              const startY = height * (0.10 + (i % 2) * 0.14);
+              const x = startX + width * 0.42 * t;
+              const y = startY + height * 0.22 * t;
+              const tail = 95 + i * 18;
+
+              const gradient = ctx.createLinearGradient(x - tail, y - tail * 0.52, x, y);
+              gradient.addColorStop(0, "rgba(255,255,255,0)");
+              gradient.addColorStop(1, `rgba(255,255,255,${(1 - t * 0.55).toFixed(3)})`);
+              ctx.strokeStyle = gradient;
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.moveTo(x - tail, y - tail * 0.52);
+              ctx.lineTo(x, y);
+              ctx.stroke();
+            }
+          }
+          return;
+        }
+
         const g = ctx.createRadialGradient(
           width * 0.5, height * 0.42, 10,
           width * 0.5, height * 0.5, Math.max(width, height) * 0.78
@@ -2930,6 +2971,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       }
 
       function drawRail() {
+        if (config.showcaseDemo?.hideRail) return;
         const start = Math.floor(cameraZ / 4) * 4 + 8;
         const points: Projected[] = [];
 
@@ -3682,7 +3724,8 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       function playFocusAudioSource(
         url: string,
         assetName: string,
-        initialVolume = 0
+        initialVolume = 0,
+        autoplay = true
       ) {
         stopFocusAudio();
         if (!url) return;
@@ -3701,7 +3744,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           advanceFocusPlaylist();
         });
 
-        void audio.play().catch(() => {});
+        if (autoplay) void audio.play().catch(() => {});
       }
 
       function primeFocusAudio(obj: SceneObject) {
@@ -3722,14 +3765,51 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         if (index < 0) {
           index = playlist.findIndex((entry) => entry.assetName === focusExperience?.object.name);
         }
-        const next = playlist[(index + 1 + playlist.length) % playlist.length];
+
+        const nextIndex = index + 1;
+        if (
+          nextIndex >= playlist.length &&
+          config.showcaseDemo?.enabled &&
+          !config.showcaseDemo?.loopFocusPlaylist
+        ) {
+          fadeOutFocusAudio();
+          return;
+        }
+
+        const next = playlist[(nextIndex + playlist.length) % playlist.length];
         if (!next) return;
 
-        playFocusAudioSource(
-          next.url,
-          next.assetName,
-          Math.max(0, Math.min(1, presentationSettings.focusAudio.volume))
-        );
+        if (config.showcaseDemo?.enabled && config.showcaseDemo?.autoAdvanceFocus) {
+          const nextObj = (layouts[next.stationIndex] ?? []).find(
+            (obj: SceneObject) => obj.kind === "3d" && obj.name === next.assetName
+          );
+          if (!nextObj) return;
+
+          const previousFocus = focusExperience;
+          previousFocus.object.local = { ...previousFocus.baseLocal };
+          previousFocus.object.velocity = { x: 0, y: 0, z: 0 };
+
+          if (next.stationIndex !== arrivingAt) {
+            arrivingAt = next.stationIndex;
+            activeStationId = stations[arrivingAt]?.id ?? activeStationId;
+            presentationSettings =
+              stationSettings[activeStationId] ??
+              defaultsForStation(stations[arrivingAt]);
+            stationSettings[activeStationId] = presentationSettings;
+          }
+
+          // Prepare the next song at time zero, but don't let it run silently
+          // during the camera move. The settle event starts + fades it in.
+          playFocusAudioSource(next.url, next.assetName, 0, false);
+          beginFocusExperience(nextObj);
+        } else {
+          playFocusAudioSource(
+            next.url,
+            next.assetName,
+            Math.max(0, Math.min(1, presentationSettings.focusAudio.volume))
+          );
+        }
+
         window.dispatchEvent(new CustomEvent("webrev:focus-playlist-track", {
           detail: {
             mode: presentationSettings.focusAudio.playbackMode,
@@ -3737,7 +3817,8 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
             stationId: next.stationId,
             stationIndex: next.stationIndex,
             assetName: next.assetName,
-            track: next.track
+            track: next.track,
+            visualFocusHandoff: Boolean(config.showcaseDemo?.enabled && config.showcaseDemo?.autoAdvanceFocus)
           }
         }));
       }
@@ -3784,6 +3865,11 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       function fadeInFocusAudio() {
         const audio = focusAudioElement;
         if (!audio || !presentationSettings.focusAudio.enabled) return;
+
+        if (audio.paused) {
+          audio.currentTime = 0;
+          void audio.play().catch(() => {});
+        }
 
         const targetVolume = Math.max(0, Math.min(1, presentationSettings.focusAudio.volume));
         const duration = Math.max(0, presentationSettings.focusAudio.fadeInMs);
@@ -3940,6 +4026,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       }
 
       function drawHud() {
+        if (config.showcaseDemo?.hideHud) return;
         ctx.save();
         ctx.fillStyle = "rgba(255,255,255,.88)";
         ctx.font = "600 14px ui-sans-serif, system-ui";
@@ -4072,6 +4159,10 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       }
 
       function requestFocusExperience(obj: SceneObject) {
+        if (config.showcaseDemo?.enabled) {
+          presentationSettings.focusAudio.playbackMode = "zone-cycle";
+          presentationSettings.focusAudio.scope = "station";
+        }
         primeFocusAudio(obj);
         beginFocusExperience(obj);
         window.dispatchEvent(new CustomEvent("webrev:focus-experience-request", {
